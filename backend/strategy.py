@@ -322,10 +322,27 @@ def run_strategy_check():
 def morning_market_briefing_job():
     """
     Automated job at 09:00:00 AM IST (Monday-Friday).
-    Warms up cache and sends morning status briefing.
+    Warms up cache, checks broker token status, and sends morning briefing or 1-click reauth link.
     """
     ist = pytz.timezone("Asia/Kolkata")
     now_str = datetime.now(ist).strftime("%Y-%m-%d %H:%M:%S IST")
+    
+    # Verify broker token health
+    conn = upstox_client.test_connection()
+    if conn.get("status") != "CONNECTED":
+        app_url = os.getenv("NEXT_PUBLIC_API_URL", "http://127.0.0.1:8000").rstrip("/")
+        auth_link = f"{app_url}/auth/login"
+        reauth_msg = (
+            f"⚠️ *Astra Algo: Upstox Token Needs Daily Approval* ⚠️\n\n"
+            f"**Time**: {now_str}\n"
+            f"**Broker Status**: Session Expired (SEBI 24h reset)\n\n"
+            f"👉 [Click Here to 1-Click Authorize]({auth_link})\n\n"
+            f"Tap the link above on your phone to approve on Upstox. The bot will automatically capture the token and arm the 09:16 AM scanner!"
+        )
+        send_telegram_alert(reauth_msg)
+        send_whatsapp_alert(reauth_msg)
+        return
+
     fetch_and_cache_daily_highs()
     
     msg = (
@@ -333,7 +350,8 @@ def morning_market_briefing_job():
         f"**Date**: {now_str}\n"
         f"**Universe**: {len(FO_UNIVERSE)} F&O Leaders Loaded\n"
         f"**Strategy**: Opening High Breakout (1-Min 09:15 Candle)\n"
-        f"**Status**: ONLINE & Ready\n\n"
+        f"**Broker**: Upstox V2 API Connected ({conn.get('user_id', 'Active')})\n"
+        f"**Status**: ONLINE & Armed\n\n"
         f"Next scan will run automatically at *09:16:00 AM IST*."
     )
     send_telegram_alert(msg)

@@ -10,6 +10,11 @@ ALLOWED_STATIC_IPS = os.getenv("ALLOWED_STATIC_IPS", "127.0.0.1,localhost").spli
 
 class IPGuardMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
+        path = request.url.path
+        # Allow OAuth callback, login redirects and docs from phone browsers
+        if path.startswith("/auth") or path == "/" or path.startswith("/docs") or path.startswith("/openapi"):
+            return await call_next(request)
+
         client_ip = request.client.host if request.client else "127.0.0.1"
         # Normalize IPv6 localhost
         if client_ip in ["::1", "localhost", "127.0.0.1", "testclient"]:

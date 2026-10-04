@@ -1,4 +1,7 @@
+import os
+import re
 from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi.responses import RedirectResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
@@ -7,7 +10,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 import pytz
 from typing import List
 
-from . import models, schemas, auth, database, security_middleware, strategy, upstox_client
+from . import models, schemas, auth, database, security_middleware, strategy, upstox_client, generate_token
 
 # Create database tables
 models.Base.metadata.create_all(bind=database.engine)
@@ -35,6 +38,95 @@ app.add_middleware(
 app.add_middleware(security_middleware.IPGuardMiddleware)
 
 scheduler = BackgroundScheduler(timezone=pytz.timezone('Asia/Kolkata'))
+
+@app.get("/auth/login")
+def auth_login():
+    """
+    Redirects user to Upstox official OAuth login page.
+    """
+    url = generate_token.generate_auth_url()
+    return RedirectResponse(url)
+
+@app.get("/", response_class=HTMLResponse)
+@app.get("/auth/callback", response_class=HTMLResponse)
+def auth_callback(code: str = None):
+    """
+    Receives authorization code from Upstox redirect, exchanges it for access token,
+    and updates system environment and broker client without manual copying.
+    """
+    if not code:
+        return HTMLResponse(
+            content="""
+            <html>
+                <body style="font-family:sans-serif; background:#0f172a; color:#f8fafc; display:flex; align-items:center; justify-content:center; height:100vh; margin:0;">
+                    <div style="text-align:center; padding:2.5rem; background:#1e293b; border-radius:12px; border:1px solid #334155; box-shadow:0 10px 25px rgba(0,0,0,0.5);">
+                        <h2 style="color:#38bdf8; margin-top:0;">⚡ Astra Algo Trading Engine</h2>
+                        <p style="color:#94a3b8;">Status: System Operational & Listening</p>
+                        <a href="/auth/login" style="display:inline-block; padding:12px 24px; background:#2563eb; color:white; text-decoration:none; border-radius:8px; font-weight:600; margin-top:10px;">1-Click Upstox Authorize</a>
+                    </div>
+                </body>
+            </html>
+            """
+        )
+
+    # Exchange code for new access token
+    token = generate_token.get_access_token(code)
+    if token:
+        # Update in-memory runtime
+        os.environ["UPSTOX_ACCESS_TOKEN"] = token
+        upstox_client.UPSTOX_ACCESS_TOKEN = token
+        
+        # Persist to .env file
+        env_path = os.path.join(os.path.dirname(__file__), "..", ".env")
+        if os.path.exists(env_path):
+            try:
+                with open(env_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+                if "UPSTOX_ACCESS_TOKEN=" in content:
+                    content = re.sub(r"UPSTOX_ACCESS_TOKEN=[^\r\n]*", f"UPSTOX_ACCESS_TOKEN={token}", content)
+                else:
+                    content += f"\nUPSTOX_ACCESS_TOKEN={token}\n"
+                with open(env_path, "w", encoding="utf-8") as f:
+                    f.write(content)
+            except Exception as e:
+                print(f"Error persisting token to .env: {e}")
+
+        # Send instant confirmation to Telegram & WhatsApp
+        confirm_msg = (
+            "✅ *Upstox Broker Authenticated!* 🚀\n\n"
+            "Your access token was refreshed automatically via 1-click authorization.\n"
+            "All market scanners (09:16 AM) are armed and active."
+        )
+        strategy.send_telegram_alert(confirm_msg)
+        strategy.send_whatsapp_alert(confirm_msg)
+
+        return HTMLResponse(
+            content="""
+            <html>
+                <body style="font-family:sans-serif; background:#0f172a; color:#f8fafc; display:flex; align-items:center; justify-content:center; height:100vh; margin:0;">
+                    <div style="text-align:center; padding:2.5rem; background:#1e293b; border-radius:12px; border:1px solid #10b981; max-width:420px; box-shadow:0 10px 25px rgba(0,0,0,0.5);">
+                        <h2 style="color:#10b981; margin-top:0;">✅ Upstox Connected!</h2>
+                        <p style="color:#94a3b8; font-size:15px;">Your token has been renewed automatically. All morning scanners are active.</p>
+                        <p style="color:#64748b; font-size:13px; margin-bottom:0;">You can now close this tab.</p>
+                    </div>
+                </body>
+            </html>
+            """
+        )
+    else:
+        return HTMLResponse(
+            content="""
+            <html>
+                <body style="font-family:sans-serif; background:#0f172a; color:#f8fafc; display:flex; align-items:center; justify-content:center; height:100vh; margin:0;">
+                    <div style="text-align:center; padding:2.5rem; background:#1e293b; border-radius:12px; border:1px solid #ef4444; max-width:420px;">
+                        <h2 style="color:#ef4444; margin-top:0;">❌ Token Exchange Failed</h2>
+                        <p style="color:#94a3b8;">Unable to exchange authorization code. Please try again.</p>
+                        <a href="/auth/login" style="display:inline-block; padding:10px 20px; background:#2563eb; color:white; text-decoration:none; border-radius:6px;">Try Again</a>
+                    </div>
+                </body>
+            </html>
+            """
+        )
 
 @app.post("/login", response_model=schemas.Token)
 def login_for_access_token(db: Session = Depends(database.get_db), form_data: OAuth2PasswordRequestForm = Depends()):
