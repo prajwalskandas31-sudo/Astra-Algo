@@ -1,6 +1,6 @@
 import os
 import re
-from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi import FastAPI, Depends, HTTPException, status, Request
 from fastapi.responses import RedirectResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordRequestForm
@@ -40,16 +40,17 @@ app.add_middleware(security_middleware.IPGuardMiddleware)
 scheduler = BackgroundScheduler(timezone=pytz.timezone('Asia/Kolkata'))
 
 @app.get("/auth/login")
-def auth_login():
+def auth_login(request: Request):
     """
     Redirects user to Upstox official OAuth login page.
     """
-    url = generate_token.generate_auth_url()
+    base_url = os.getenv("REDIRECT_URI") or os.getenv("NEXT_PUBLIC_API_URL") or str(request.base_url).rstrip("/")
+    url = generate_token.generate_auth_url(redirect_uri=base_url)
     return RedirectResponse(url)
 
 @app.get("/", response_class=HTMLResponse)
 @app.get("/auth/callback", response_class=HTMLResponse)
-def auth_callback(code: str = None):
+def auth_callback(request: Request, code: str = None):
     """
     Receives authorization code from Upstox redirect, exchanges it for access token,
     and updates system environment and broker client without manual copying.
@@ -70,7 +71,8 @@ def auth_callback(code: str = None):
         )
 
     # Exchange code for new access token
-    token = generate_token.get_access_token(code)
+    base_url = os.getenv("REDIRECT_URI") or os.getenv("NEXT_PUBLIC_API_URL") or str(request.base_url).rstrip("/")
+    token = generate_token.get_access_token(code, redirect_uri=base_url)
     if token:
         # Update in-memory runtime
         os.environ["UPSTOX_ACCESS_TOKEN"] = token

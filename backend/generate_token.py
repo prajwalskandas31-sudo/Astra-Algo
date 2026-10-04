@@ -7,18 +7,21 @@ load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
 API_KEY = os.getenv("UPSTOX_API_KEY")
 API_SECRET = os.getenv("UPSTOX_API_SECRET")
-REDIRECT_URI = "http://127.0.0.1:8000"
+def get_redirect_uri():
+    return os.getenv("REDIRECT_URI") or os.getenv("NEXT_PUBLIC_API_URL", "http://127.0.0.1:8000").rstrip("/")
 
-def generate_auth_url():
+def generate_auth_url(redirect_uri: str = None):
+    uri = redirect_uri or get_redirect_uri()
     params = {
         "response_type": "code",
         "client_id": API_KEY,
-        "redirect_uri": REDIRECT_URI
+        "redirect_uri": uri
     }
     url = f"https://api.upstox.com/v2/login/authorization/dialog?{urllib.parse.urlencode(params)}"
     return url
 
-def get_access_token(code: str):
+def get_access_token(code: str, redirect_uri: str = None):
+    uri = redirect_uri or get_redirect_uri()
     url = "https://api.upstox.com/v2/login/authorization/token"
     headers = {
         "accept": "application/json",
@@ -28,7 +31,7 @@ def get_access_token(code: str):
         "code": code,
         "client_id": API_KEY,
         "client_secret": API_SECRET,
-        "redirect_uri": REDIRECT_URI,
+        "redirect_uri": uri,
         "grant_type": "authorization_code",
     }
     response = requests.post(url, headers=headers, data=data)
