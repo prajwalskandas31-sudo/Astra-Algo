@@ -94,6 +94,86 @@ def send_whatsapp_alert(message: str, to_phone: str = None) -> dict:
         "results": results
     }
 
+def send_whatsapp_cta_button(
+    header_text: str,
+    body_text: str,
+    button_text: str,
+    button_url: str,
+    footer_text: str = "Astra Algo Trading Engine",
+    to_phone: str = None
+) -> dict:
+    """
+    Sends a native interactive CTA URL button via WhatsApp Cloud API.
+    Renders as a physical tappable button on WhatsApp mobile and desktop apps.
+    """
+    target_str = to_phone or WHATSAPP_RECIPIENT_PHONE or ""
+    raw_list = parse_recipient_list(target_str)
+    recipients = [format_whatsapp_phone(p) for p in raw_list if format_whatsapp_phone(p)]
+    
+    if not WHATSAPP_TOKEN or not WHATSAPP_PHONE_ID or not recipients:
+        return {
+            "timestamp": datetime.now(pytz.timezone("Asia/Kolkata")).isoformat(),
+            "status": "CONFIG_MISSING",
+            "message": "WhatsApp Token, Phone ID or recipient phone missing."
+        }
+        
+    url = f"https://graph.facebook.com/v20.0/{WHATSAPP_PHONE_ID}/messages"
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    
+    results = []
+    for r in recipients:
+        payload = {
+            "messaging_product": "whatsapp",
+            "recipient_type": "individual",
+            "to": r,
+            "type": "interactive",
+            "interactive": {
+                "type": "cta_url",
+                "header": {
+                    "type": "text",
+                    "text": header_text
+                },
+                "body": {
+                    "text": body_text
+                },
+                "footer": {
+                    "text": footer_text
+                },
+                "action": {
+                    "name": "cta_url",
+                    "parameters": {
+                        "display_text": button_text,
+                        "url": button_url
+                    }
+                }
+            }
+        }
+        try:
+            resp = requests.post(url, json=payload, headers=headers, timeout=5)
+            results.append({
+                "timestamp": datetime.now(pytz.timezone("Asia/Kolkata")).isoformat(),
+                "recipient": r,
+                "status": "SENT" if resp.status_code == 200 else f"HTTP_{resp.status_code}",
+                "response": resp.json() if resp.status_code == 200 else resp.text
+            })
+        except Exception as e:
+            results.append({
+                "timestamp": datetime.now(pytz.timezone("Asia/Kolkata")).isoformat(),
+                "recipient": r,
+                "status": "ERROR",
+                "error": str(e)
+            })
+
+    all_sent = all(res.get("status") == "SENT" for res in results)
+    return {
+        "status": "SENT" if all_sent else "PARTIAL_OR_FAILED",
+        "recipients_count": len(recipients),
+        "results": results
+    }
+
 def send_telegram_alert(message: str) -> dict:
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID or "your_" in TELEGRAM_BOT_TOKEN:
         log_entry = {
@@ -330,17 +410,24 @@ def morning_market_briefing_job():
     # Verify broker token health
     conn = upstox_client.test_connection()
     if conn.get("status") != "CONNECTED":
-        app_url = os.getenv("NEXT_PUBLIC_API_URL", "http://127.0.0.1:8000").rstrip("/")
+        app_url = os.getenv("REDIRECT_URI") or os.getenv("NEXT_PUBLIC_API_URL") or "https://astra-algo.onrender.com"
+        app_url = app_url.rstrip("/")
         auth_link = f"{app_url}/auth/login"
         reauth_msg = (
             f"⚠️ *Astra Algo: Upstox Token Needs Daily Approval* ⚠️\n\n"
             f"**Time**: {now_str}\n"
             f"**Broker Status**: Session Expired (SEBI 24h reset)\n\n"
             f"👉 [Click Here to 1-Click Authorize]({auth_link})\n\n"
-            f"Tap the link above on your phone to approve on Upstox. The bot will automatically capture the token and arm the 09:16 AM scanner!"
+            f"Tap the button below or link above to approve on Upstox. The bot will automatically capture the token and arm the 09:16 AM scanner!"
         )
         send_telegram_alert(reauth_msg)
-        send_whatsapp_alert(reauth_msg)
+        # Send native interactive CTA URL button for WhatsApp
+        send_whatsapp_cta_button(
+            header_text="⚡ Broker Session Expired",
+            body_text=f"Your Upstox broker session has expired ({now_str}). Tap the button below for 1-click authorization to arm Astra Algo for today's market.",
+            button_text="👉 Authorize Upstox",
+            button_url=auth_link
+        )
         return
 
     fetch_and_cache_daily_highs()

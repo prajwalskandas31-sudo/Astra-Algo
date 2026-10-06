@@ -39,12 +39,19 @@ app.add_middleware(security_middleware.IPGuardMiddleware)
 
 scheduler = BackgroundScheduler(timezone=pytz.timezone('Asia/Kolkata'))
 
+def resolve_base_url(request: Request) -> str:
+    base_url = os.getenv("REDIRECT_URI") or os.getenv("NEXT_PUBLIC_API_URL") or str(request.base_url).rstrip("/")
+    base_url = base_url.rstrip("/")
+    if "onrender.com" in base_url and base_url.startswith("http://"):
+        base_url = "https://" + base_url[len("http://"):]
+    return base_url
+
 @app.get("/auth/login")
 def auth_login(request: Request):
     """
     Redirects user to Upstox official OAuth login page.
     """
-    base_url = os.getenv("REDIRECT_URI") or os.getenv("NEXT_PUBLIC_API_URL") or str(request.base_url).rstrip("/")
+    base_url = resolve_base_url(request)
     url = generate_token.generate_auth_url(redirect_uri=base_url)
     return RedirectResponse(url)
 
@@ -71,7 +78,7 @@ def auth_callback(request: Request, code: str = None):
         )
 
     # Exchange code for new access token
-    base_url = os.getenv("REDIRECT_URI") or os.getenv("NEXT_PUBLIC_API_URL") or str(request.base_url).rstrip("/")
+    base_url = resolve_base_url(request)
     token = generate_token.get_access_token(code, redirect_uri=base_url)
     if token:
         # Update in-memory runtime
@@ -256,6 +263,24 @@ def test_notifications(
         "channel": channel,
         "dispatches": result
     }
+
+@app.get("/notifications/send-button")
+@app.post("/notifications/send-button")
+def send_reauth_button(request: Request):
+    """
+    Dispatches a native clickable WhatsApp CTA URL button to authorize Upstox on demand.
+    """
+    base_url = resolve_base_url(request)
+    auth_link = f"{base_url}/auth/login"
+    ist = pytz.timezone("Asia/Kolkata")
+    now_str = datetime.now(ist).strftime("%Y-%m-%d %H:%M:%S IST")
+    res = strategy.send_whatsapp_cta_button(
+        header_text="⚡ Broker Session Expired",
+        body_text=f"Your Upstox broker session requires renewal ({now_str}). Tap the button below to authorize with 1-click.",
+        button_text="👉 Authorize Upstox",
+        button_url=auth_link
+    )
+    return {"status": "SUCCESS", "whatsapp_result": res, "auth_link": auth_link}
 
 @app.on_event("startup")
 def startup_event():
