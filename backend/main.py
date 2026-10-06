@@ -278,9 +278,10 @@ def send_reauth_button(request: Request):
         header_text="⚡ Broker Session Expired",
         body_text=f"Your Upstox broker session requires renewal ({now_str}). Tap the button below to authorize with 1-click.",
         button_text="👉 Authorize Upstox",
-        button_url=auth_link
+        button_url=auth_link,
+        to_phone=strategy.WHATSAPP_AUTH_PHONE
     )
-    return {"status": "SUCCESS", "whatsapp_result": res, "auth_link": auth_link}
+    return {"status": "SUCCESS", "whatsapp_result": res, "auth_link": auth_link, "recipient": strategy.WHATSAPP_AUTH_PHONE}
 
 @app.on_event("startup")
 def startup_event():

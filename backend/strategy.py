@@ -20,6 +20,7 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
 WHATSAPP_PHONE_ID = os.getenv("WHATSAPP_PHONE_ID")
 WHATSAPP_RECIPIENT_PHONE = os.getenv("WHATSAPP_RECIPIENT_PHONE")
+WHATSAPP_AUTH_PHONE = os.getenv("WHATSAPP_AUTH_PHONE", "917022463267")
 
 # In-memory execution logs
 STRATEGY_LOGS = []
@@ -421,12 +422,13 @@ def morning_market_briefing_job():
             f"Tap the button below or link above to approve on Upstox. The bot will automatically capture the token and arm the 09:16 AM scanner!"
         )
         send_telegram_alert(reauth_msg)
-        # Send native interactive CTA URL button for WhatsApp
+        # Send native interactive CTA URL button for WhatsApp to the authorization phone
         send_whatsapp_cta_button(
             header_text="⚡ Broker Session Expired",
             body_text=f"Your Upstox broker session has expired ({now_str}). Tap the button below for 1-click authorization to arm Astra Algo for today's market.",
             button_text="👉 Authorize Upstox",
-            button_url=auth_link
+            button_url=auth_link,
+            to_phone=WHATSAPP_AUTH_PHONE
         )
         return
 
