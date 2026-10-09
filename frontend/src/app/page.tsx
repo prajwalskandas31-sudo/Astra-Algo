@@ -2,7 +2,20 @@
 
 import React, { useState, useEffect } from 'react';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || (typeof window !== "undefined" && window.location.hostname === "localhost" ? "http://localhost:8000" : "https://astra-algo.onrender.com");
+const getApiBase = () => {
+  if (process.env.NEXT_PUBLIC_API_URL) return process.env.NEXT_PUBLIC_API_URL;
+  if (typeof window !== "undefined") {
+    if (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1") {
+      return "http://localhost:8000";
+    }
+    if (window.location.hostname.includes("trycloudflare.com")) {
+      return "https://unified-lectures-carl-secretary.trycloudflare.com";
+    }
+  }
+  return "https://astra-algo.onrender.com";
+};
+
+const API_BASE = getApiBase();
 
 interface UserProfile {
   id: number;
