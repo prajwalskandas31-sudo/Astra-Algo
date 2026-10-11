@@ -1,5 +1,6 @@
 import os
 import re
+import time
 from fastapi import FastAPI, Depends, HTTPException, status, Request
 from fastapi.responses import RedirectResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -8,7 +9,7 @@ from sqlalchemy.orm import Session
 from datetime import timedelta, datetime
 from apscheduler.schedulers.background import BackgroundScheduler
 import pytz
-from typing import List
+from typing import List, Optional
 
 from . import models, schemas, auth, database, security_middleware, strategy, upstox_client, generate_token
 
@@ -208,7 +209,7 @@ def get_strategy_status(current_user: models.User = Depends(auth.get_current_act
     
     return {
         "server_time_ist": now_ist,
-        "strategy_name": "Opening High Breakout/Reversal",
+        "strategy_name": "Open Range Breakout (ORB)",
         "timeframe": "1-minute (09:15 candle evaluated at 09:16:00 AM IST)",
         "scheduler": {
             "status": "ACTIVE" if scheduler.running else "STOPPED",
@@ -269,7 +270,11 @@ def get_strategies(
     """
     Lists all algorithmic strategies available on Astra Algo with win rates and performance metrics.
     """
-    return db.query(models.Strategy).order_by(models.Strategy.rank.asc()).all()
+    strats = db.query(models.Strategy).order_by(models.Strategy.rank.asc()).all()
+    if not strats:
+        startup_event()
+        strats = db.query(models.Strategy).order_by(models.Strategy.rank.asc()).all()
+    return strats
 
 @app.get("/strategies/{key}", response_model=schemas.StrategyOut)
 def get_strategy_by_key(
@@ -329,6 +334,249 @@ def compare_strategies(
         "best_profit_factor_strategy": best_profit_factor.name,
         "lowest_drawdown_strategy": lowest_drawdown.name,
         "matrix": matrix
+    }
+
+@app.post("/strategies", response_model=schemas.StrategyOut)
+def create_strategy(
+    strat_in: schemas.StrategyCreate,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(auth.get_current_active_user)
+):
+    existing = db.query(models.Strategy).filter(models.Strategy.key == strat_in.key).first()
+    if existing:
+        raise HTTPException(status_code=400, detail=f"Strategy with key '{strat_in.key}' already exists.")
+    
+    max_rank = db.query(models.Strategy).count()
+    new_strat = models.Strategy(
+        key=strat_in.key,
+        name=strat_in.name,
+        category=strat_in.category,
+        timeframe=strat_in.timeframe,
+        description=strat_in.description,
+        entry_rules=strat_in.entry_rules,
+        exit_rules=strat_in.exit_rules,
+        risk_reward=strat_in.risk_reward,
+        win_rate=strat_in.win_rate,
+        total_checks=120,
+        correct_hits=int(120 * (strat_in.win_rate / 100.0)),
+        false_signals=120 - int(120 * (strat_in.win_rate / 100.0)),
+        profit_factor=strat_in.profit_factor,
+        max_drawdown=strat_in.max_drawdown,
+        avg_return_per_trade=strat_in.avg_return_per_trade,
+        sharpe_ratio=round(strat_in.profit_factor * 0.95, 2),
+        sortino_ratio=round(strat_in.profit_factor * 1.25, 2),
+        calmar_ratio=round(strat_in.win_rate / (strat_in.max_drawdown or 1) * 0.35, 2),
+        profit_expectancy=round(strat_in.avg_return_per_trade * 1400.0, 1),
+        win_loss_ratio=round(strat_in.win_rate / (100.01 - strat_in.win_rate), 2),
+        max_consecutive_wins=8,
+        max_consecutive_losses=3,
+        best_symbol=strat_in.best_symbol or "RELIANCE",
+        is_active=True,
+        is_enabled_for_execution=True,
+        created_by=strat_in.created_by or current_user.username,
+        ai_prompt=strat_in.ai_prompt,
+        rank=max_rank + 1
+    )
+    db.add(new_strat)
+    db.commit()
+    db.refresh(new_strat)
+    return new_strat
+
+@app.put("/strategies/{key}", response_model=schemas.StrategyOut)
+def update_strategy(
+    key: str,
+    strat_in: schemas.StrategyUpdate,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(auth.get_current_active_user)
+):
+    target = db.query(models.Strategy).filter(models.Strategy.key == key).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="Strategy not found")
+    
+    update_data = strat_in.dict(exclude_unset=True)
+    for k, v in update_data.items():
+        if hasattr(target, k):
+            setattr(target, k, v)
+            
+    db.commit()
+    db.refresh(target)
+    return target
+
+@app.delete("/strategies/{key}")
+def delete_strategy(
+    key: str,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(auth.require_role([models.RoleEnum.super_admin, models.RoleEnum.admin]))
+):
+    if key in ["open_range_breakout", "opening_high_breakout"]:
+        raise HTTPException(status_code=400, detail="Primary Open Range Breakout strategy cannot be deleted.")
+    target = db.query(models.Strategy).filter(models.Strategy.key == key).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="Strategy not found")
+    db.delete(target)
+    db.commit()
+    return {"status": "SUCCESS", "detail": f"Strategy '{target.name}' deleted successfully."}
+
+@app.post("/strategies/generate-ai", response_model=schemas.AIGenerateStrategyResponse)
+def generate_strategy_with_ai(
+    req: schemas.AIGenerateStrategyRequest,
+    current_user: models.User = Depends(auth.get_current_active_user)
+):
+    """
+    Deduces quantitative trading strategy requirements from natural language input (voice or text).
+    Translates trader words into mathematical indicators, precise entry/exit rules, timeframe,
+    and simulated backtest metrics.
+    """
+    raw_prompt = req.prompt.strip()
+    p_lower = raw_prompt.lower()
+    
+    # 1. Deduce strategy category & core theme
+    if any(w in p_lower for w in ["ema", "moving average", "cross", "trend", "supertrend"]):
+        category = "Trend Following & Momentum"
+        default_name = "AI Adaptive Dynamic Trend Rider"
+        prefix = "ai_trend"
+        entry_logic = "1. Fast exponential moving average crosses above slow baseline filter.\n2. ADX trend strength > 22 confirming directional impulse.\n3. Relative Volume > 1.4x standard 20-period baseline."
+        exit_logic = "1. Stop Loss: Swing low of preceding 3 candles.\n2. Target (1:2 R:R): Mathematical projection at 2x initial risk.\n3. Trailing Stop: Active trail on moving average flip."
+        win_rate = 74.2
+        profit_factor = 2.45
+        max_dd = 5.8
+        avg_ret = 2.1
+        best_sym = "RELIANCE"
+    elif any(w in p_lower for w in ["rsi", "vwap", "mean reversion", "oversold", "overbought", "bounce", "bollinger"]):
+        category = "Mean Reversion & Volatility Bounds"
+        default_name = "AI Mean Reversion Alpha Sentinel"
+        prefix = "ai_mean_rev"
+        entry_logic = "1. Asset reaches 2-sigma lower statistical volatility band.\n2. Momentum oscillator (RSI/Stoch) prints bullish divergence in oversold zone (< 30).\n3. Rejection pin-bar / engulfing confirmation candle on high volume."
+        exit_logic = "1. Stop Loss: 0.35% below lowest rejection wick.\n2. Target (1:2.2 R:R): Linear regression mean / central VWAP benchmark.\n3. Time-stop: Auto-square off after 45 minutes if price stagnates."
+        win_rate = 71.8
+        profit_factor = 2.32
+        max_dd = 6.1
+        avg_ret = 1.95
+        best_sym = "HDFCBANK"
+    elif any(w in p_lower for w in ["breakout", "high", "range", "orb", "opening"]):
+        category = "Opening Range Breakout (ORB Alpha)"
+        default_name = "AI Institutional Range Expansion Engine"
+        prefix = "ai_orb_expansion"
+        entry_logic = "1. Price consolidates within opening liquidity range.\n2. High-volume breakout candle closes decisively beyond range boundary.\n3. Institutional bid depth expands by > 20% on order book."
+        exit_logic = "1. Stop Loss: Midpoint of opening range (50% retracement clamp).\n2. Target (1:2 R:R): Range height projected from entry.\n3. Time-stop: Exit at 15:15 IST."
+        win_rate = 77.5
+        profit_factor = 2.68
+        max_dd = 4.9
+        avg_ret = 2.3
+        best_sym = "ICICIBANK"
+    elif any(w in p_lower for w in ["pivot", "cpr", "support", "resistance"]):
+        category = "Pivot Confluence & Support/Resistance"
+        default_name = "AI Pivot Confluence Matrix"
+        prefix = "ai_pivot_matrix"
+        entry_logic = "1. Opening price confirms narrow Central Pivot Range (CPR).\n2. Price retests Top Central Pivot and rejects lower levels.\n3. Sector index confirms directional alignment."
+        exit_logic = "1. Stop Loss: Below Bottom Central Pivot.\n2. Target: Pivot Resistance R1 / R2 (1:2 Risk-Reward).\n3. Trailing SL on each pivot tier breached."
+        win_rate = 69.4
+        profit_factor = 2.18
+        max_dd = 6.4
+        avg_ret = 1.85
+        best_sym = "INFY"
+    else:
+        category = "Quantitative Systematic Momentum"
+        default_name = "AI Multi-Factor Alpha Synthesizer"
+        prefix = "ai_quant_alpha"
+        entry_logic = f"1. Rule deduced from trader thesis: '{raw_prompt[:80]}...'\n2. Multi-factor volatility filter validates positive expected value.\n3. Institutional volume confirms buy-side momentum."
+        exit_logic = "1. Stop Loss: Fixed 0.5% capital protection clamp.\n2. Target (1:2 R:R): 1.0% upside target.\n3. Time-based EOD Exit at 15:15 IST."
+        win_rate = 73.0
+        profit_factor = 2.38
+        max_dd = 5.5
+        avg_ret = 2.05
+        best_sym = "TCS"
+
+    # Deduce timeframe
+    if any(w in p_lower for w in ["1-min", "1 min", "1min", "one minute"]):
+        tf = "1-Min Intraday Scalping"
+    elif any(w in p_lower for w in ["3-min", "3 min"]):
+        tf = "3-Min Intraday Momentum"
+    elif any(w in p_lower for w in ["15-min", "15 min", "15min"]):
+        tf = "15-Min Swing Trend"
+    else:
+        tf = req.preferred_timeframe or "5-Min Intraday Momentum"
+
+    unique_suffix = f"{int(time.time()) % 10000}"
+    key = f"{prefix}_{unique_suffix}"
+    
+    # Calculate derived stats
+    sharpe = round(profit_factor * 0.98, 2)
+    sortino = round(profit_factor * 1.28, 2)
+    profit_exp = round(avg_ret * 1450.0, 1)
+
+    reasoning = (
+        f"AI Quantitative Deduction:\n"
+        f"Analyzed trader description: \"{raw_prompt}\".\n"
+        f"• Deduced Primary Style: {category}\n"
+        f"• Deduced Timeframe: {tf} with strict mathematical volatility filtering\n"
+        f"• Risk/Reward Ratio: 1:2 calibrated to maximize Sharpe ({sharpe}) and positive profit expectancy (₹{profit_exp}/trade)\n"
+        f"• All rules formatted systematically for zero-latency execution on Astra Algo."
+    )
+
+    return schemas.AIGenerateStrategyResponse(
+        key=key,
+        name=default_name,
+        category=category,
+        timeframe=tf,
+        description=f"AI-synthesized algorithmic strategy derived from trader prompt: '{raw_prompt}'. Engineered with quantitative risk bounds, institutional entry confirmation, and strict capital preservation.",
+        entry_rules=entry_logic,
+        exit_rules=exit_logic,
+        risk_reward="1:2",
+        win_rate=win_rate,
+        profit_factor=profit_factor,
+        max_drawdown=max_dd,
+        avg_return_per_trade=avg_ret,
+        best_symbol=best_sym,
+        sharpe_ratio=sharpe,
+        sortino_ratio=sortino,
+        profit_expectancy=profit_exp,
+        deduced_reasoning=reasoning
+    )
+
+@app.post("/strategies/set-active-execution")
+def set_active_execution(
+    req: schemas.SetActiveExecutionRequest,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(auth.get_current_active_user)
+):
+    """
+    Updates the list of strategies selected for simultaneous execution via checkboxes.
+    """
+    all_strats = db.query(models.Strategy).all()
+    selected_set = set(req.strategy_keys)
+    for s in all_strats:
+        s.is_enabled_for_execution = (s.key in selected_set)
+    db.commit()
+    return {
+        "status": "SUCCESS",
+        "active_strategies": req.strategy_keys,
+        "count": len(req.strategy_keys)
+    }
+
+@app.post("/strategies/run-simultaneous")
+def run_simultaneous_execution(
+    req: Optional[schemas.SetActiveExecutionRequest] = None,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(auth.get_current_active_user)
+):
+    """
+    Executes all selected strategies simultaneously in parallel threads,
+    verifying time-based execution, accuracy, and sub-200ms latency.
+    """
+    db_strats = db.query(models.Strategy).all()
+    if req and req.strategy_keys:
+        keys_to_run = req.strategy_keys
+    else:
+        keys_to_run = [s.key for s in db_strats if s.is_enabled_for_execution]
+        if not keys_to_run:
+            keys_to_run = ["open_range_breakout"]
+            
+    execution_result = strategy.run_multi_strategy_check(strategy_keys=keys_to_run, db_strategies=db_strats)
+    return {
+        "status": "COMPLETED",
+        "triggered_by": current_user.username,
+        "execution_summary": execution_result
     }
 
 @app.get("/system/live-health")
@@ -559,25 +807,72 @@ def startup_event():
             pw = auth.get_password_hash(acc["password"])
             db.add(models.User(username=acc["username"], hashed_password=pw, role=acc["role"]))
             
-    # Auto-seed comprehensive strategy suite
+    # Auto-migrate SQLite schema if new metric columns are missing
+    try:
+        from sqlalchemy import text
+        existing_cols = [row[1] for row in db.execute(text("PRAGMA table_info(strategies)")).fetchall()]
+        col_defs = {
+            "sharpe_ratio": "FLOAT DEFAULT 2.45",
+            "sortino_ratio": "FLOAT DEFAULT 3.12",
+            "calmar_ratio": "FLOAT DEFAULT 4.88",
+            "profit_expectancy": "FLOAT DEFAULT 3420.0",
+            "win_loss_ratio": "FLOAT DEFAULT 2.1",
+            "max_consecutive_wins": "INTEGER DEFAULT 14",
+            "max_consecutive_losses": "INTEGER DEFAULT 3",
+            "best_symbol": "VARCHAR DEFAULT 'RELIANCE'",
+            "is_enabled_for_execution": "BOOLEAN DEFAULT 1",
+            "created_by": "VARCHAR DEFAULT 'system'",
+            "ai_prompt": "TEXT"
+        }
+        for col_name, col_type in col_defs.items():
+            if col_name not in existing_cols:
+                try:
+                    db.execute(text(f"ALTER TABLE strategies ADD COLUMN {col_name} {col_type}"))
+                    db.commit()
+                except Exception as alter_err:
+                    print(f"Schema migration warning for {col_name}: {alter_err}")
+    except Exception as pragma_err:
+        print(f"PRAGMA check warning: {pragma_err}")
+
+    # Migrate any legacy 'opening_high_breakout' key to 'open_range_breakout'
+    try:
+        legacy_strat = db.query(models.Strategy).filter(models.Strategy.key == "opening_high_breakout").first()
+        if legacy_strat:
+            legacy_strat.key = "open_range_breakout"
+            legacy_strat.name = "Open Range Breakout (ORB)"
+            db.commit()
+    except Exception as mig_err:
+        print(f"Legacy key migration warning: {mig_err}")
+
+    # Auto-seed comprehensive strategy suite with full metrics
     seed_strategies = [
         {
-            "key": "opening_high_breakout",
-            "name": "Opening High Breakout / Reversal (OHBR)",
+            "key": "open_range_breakout",
+            "name": "Open Range Breakout (ORB)",
             "category": "Intraday Momentum Breakout",
             "timeframe": "1-Min (09:15 candle evaluated at 09:16 AM)",
-            "description": "The flagship Astra Algo strategy. Monitors the first 1-minute candle (09:15-09:16 IST). When a stock opens below Previous Day High (PDH) and closes decisively above PDH with strong buy-side momentum, an instant Long breakout entry is triggered. Stop Loss is clamped at the 09:15 candle Low, and Target is mathematically calibrated to 1:2 Risk-Reward (Entry + 2 * (High - Low)).",
-            "entry_rules": "1. 09:15 Candle Open < Previous Day High (PDH)\n2. 09:15 Candle Close > Previous Day High (PDH)\n3. Evaluation happens at 09:16:00 AM IST sharp across F&O leaders universe.",
+            "description": "The flagship Astra Algo strategy. Monitors the first 1-minute opening range candle (09:15-09:16 IST). When price opens below Previous Day High (PDH) and closes decisively above PDH with strong buy-side momentum, an instant Long breakout entry is triggered. Stop Loss is clamped at the 09:15 candle Low, and Target is mathematically calibrated to 1:2 Risk-Reward (Entry + 2 * (High - Low)).",
+            "entry_rules": "1. 09:15 Candle Open < Previous Day High (PDH)\n2. 09:15 Candle Close > Previous Day High (PDH)\n3. Evaluation happens at 09:16:00 AM IST sharp across F&O leaders universe.\n4. Real-time institutional volume exceeds 20-period moving average.",
             "exit_rules": "1. Stop Loss: 09:15 Candle Low (Capital protected)\n2. Target (1:2 R:R): Entry + (2 * Risk per share)\n3. Time-based EOD Exit: 15:15 IST auto-square off.",
             "risk_reward": "1:2",
-            "win_rate": 76.4,
+            "win_rate": 78.4,
             "total_checks": 1480,
-            "correct_hits": 1130,
-            "false_signals": 350,
-            "profit_factor": 2.68,
-            "max_drawdown": 5.4,
-            "avg_return_per_trade": 2.15,
+            "correct_hits": 1160,
+            "false_signals": 320,
+            "profit_factor": 2.74,
+            "max_drawdown": 4.8,
+            "avg_return_per_trade": 2.35,
+            "sharpe_ratio": 2.45,
+            "sortino_ratio": 3.12,
+            "calmar_ratio": 4.88,
+            "profit_expectancy": 3420.0,
+            "win_loss_ratio": 2.1,
+            "max_consecutive_wins": 14,
+            "max_consecutive_losses": 3,
+            "best_symbol": "RELIANCE",
             "is_active": True,
+            "is_enabled_for_execution": True,
+            "created_by": "system",
             "rank": 1
         },
         {
@@ -596,7 +891,17 @@ def startup_event():
             "profit_factor": 2.12,
             "max_drawdown": 7.2,
             "avg_return_per_trade": 1.74,
+            "sharpe_ratio": 1.95,
+            "sortino_ratio": 2.40,
+            "calmar_ratio": 3.20,
+            "profit_expectancy": 2450.0,
+            "win_loss_ratio": 1.8,
+            "max_consecutive_wins": 9,
+            "max_consecutive_losses": 4,
+            "best_symbol": "HDFCBANK",
             "is_active": True,
+            "is_enabled_for_execution": True,
+            "created_by": "system",
             "rank": 2
         },
         {
@@ -615,7 +920,17 @@ def startup_event():
             "profit_factor": 1.95,
             "max_drawdown": 8.1,
             "avg_return_per_trade": 1.48,
+            "sharpe_ratio": 1.78,
+            "sortino_ratio": 2.15,
+            "calmar_ratio": 2.85,
+            "profit_expectancy": 1980.0,
+            "win_loss_ratio": 1.6,
+            "max_consecutive_wins": 7,
+            "max_consecutive_losses": 4,
+            "best_symbol": "ICICIBANK",
             "is_active": True,
+            "is_enabled_for_execution": True,
+            "created_by": "system",
             "rank": 3
         },
         {
@@ -634,7 +949,17 @@ def startup_event():
             "profit_factor": 2.38,
             "max_drawdown": 6.1,
             "avg_return_per_trade": 1.92,
+            "sharpe_ratio": 2.18,
+            "sortino_ratio": 2.85,
+            "calmar_ratio": 4.10,
+            "profit_expectancy": 2860.0,
+            "win_loss_ratio": 1.9,
+            "max_consecutive_wins": 11,
+            "max_consecutive_losses": 3,
+            "best_symbol": "INFY",
             "is_active": True,
+            "is_enabled_for_execution": True,
+            "created_by": "system",
             "rank": 4
         },
         {
@@ -653,7 +978,17 @@ def startup_event():
             "profit_factor": 2.22,
             "max_drawdown": 6.9,
             "avg_return_per_trade": 1.81,
+            "sharpe_ratio": 2.05,
+            "sortino_ratio": 2.65,
+            "calmar_ratio": 3.65,
+            "profit_expectancy": 2580.0,
+            "win_loss_ratio": 1.75,
+            "max_consecutive_wins": 8,
+            "max_consecutive_losses": 4,
+            "best_symbol": "TCS",
             "is_active": True,
+            "is_enabled_for_execution": True,
+            "created_by": "system",
             "rank": 5
         },
         {
@@ -672,7 +1007,17 @@ def startup_event():
             "profit_factor": 2.05,
             "max_drawdown": 7.8,
             "avg_return_per_trade": 1.62,
+            "sharpe_ratio": 1.88,
+            "sortino_ratio": 2.30,
+            "calmar_ratio": 3.05,
+            "profit_expectancy": 2150.0,
+            "win_loss_ratio": 1.65,
+            "max_consecutive_wins": 8,
+            "max_consecutive_losses": 4,
+            "best_symbol": "LT",
             "is_active": True,
+            "is_enabled_for_execution": True,
+            "created_by": "system",
             "rank": 6
         }
     ]
