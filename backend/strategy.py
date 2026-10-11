@@ -128,7 +128,7 @@ def send_whatsapp_single(message: str, recipient: str, triggered_by: str = "syst
         return result
 
 def send_whatsapp_alert(message: str, to_phone: str = None, triggered_by: str = "system") -> dict:
-    target_str = to_phone or WHATSAPP_RECIPIENT_PHONE or ""
+    target_str = to_phone or os.getenv("WHATSAPP_RECIPIENT_PHONE") or WHATSAPP_RECIPIENT_PHONE or ""
     raw_list = parse_recipient_list(target_str)
     recipients = [format_whatsapp_phone(p) for p in raw_list if format_whatsapp_phone(p)]
     
@@ -164,7 +164,7 @@ def send_whatsapp_cta_button(
     Sends a native interactive CTA URL button via WhatsApp Cloud API.
     Renders as a physical tappable button on WhatsApp mobile and desktop apps.
     """
-    target_str = to_phone or WHATSAPP_RECIPIENT_PHONE or ""
+    target_str = to_phone or os.getenv("WHATSAPP_RECIPIENT_PHONE") or WHATSAPP_RECIPIENT_PHONE or ""
     raw_list = parse_recipient_list(target_str)
     recipients = [format_whatsapp_phone(p) for p in raw_list if format_whatsapp_phone(p)]
     
@@ -252,7 +252,7 @@ def send_telegram_alert(message: str, triggered_by: str = "system") -> dict:
         record_audit_log("telegram", "LOCAL_CONSOLE", "telegram_alert", message, "CONFIG_MISSING", log_entry, triggered_by)
         return log_entry
 
-    chat_ids = parse_recipient_list(TELEGRAM_CHAT_ID)
+    chat_ids = parse_recipient_list(os.getenv("TELEGRAM_CHAT_ID") or TELEGRAM_CHAT_ID)
     if not chat_ids:
         err_res = {
             "timestamp": datetime.now(pytz.timezone("Asia/Kolkata")).isoformat(),
