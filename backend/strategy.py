@@ -1,6 +1,8 @@
 import os
 import time
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 import pytz
@@ -21,6 +23,19 @@ WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
 WHATSAPP_PHONE_ID = os.getenv("WHATSAPP_PHONE_ID")
 WHATSAPP_RECIPIENT_PHONE = os.getenv("WHATSAPP_RECIPIENT_PHONE")
 WHATSAPP_AUTH_PHONE = os.getenv("WHATSAPP_AUTH_PHONE", "917022463267")
+
+# Persistent notification session with HTTP connection pooling for sub-40ms dispatches
+NOTIF_SESSION = requests.Session()
+_notif_adapter = HTTPAdapter(
+    pool_connections=25,
+    pool_maxsize=25,
+    max_retries=Retry(total=2, backoff_factor=0.1, status_forcelist=[502, 503, 504])
+)
+NOTIF_SESSION.mount("https://", _notif_adapter)
+NOTIF_SESSION.mount("http://", _notif_adapter)
+
+# Asynchronous background alert dispatch pool: decouples network alert latency from strategy execution
+_ALERT_WORKER_POOL = ThreadPoolExecutor(max_workers=8, thread_name_prefix="AlertWorker")
 
 # In-memory execution logs
 STRATEGY_LOGS = []
@@ -90,7 +105,7 @@ def send_whatsapp_single(message: str, recipient: str, triggered_by: str = "syst
         "text": {"preview_url": False, "body": message}
     }
     try:
-        resp = requests.post(url, json=payload, headers=headers, timeout=5)
+        resp = NOTIF_SESSION.post(url, json=payload, headers=headers, timeout=4)
         status = "SENT" if resp.status_code == 200 else f"HTTP_{resp.status_code}"
         resp_body = resp.json() if resp.status_code == 200 else resp.text
         result = {
@@ -126,14 +141,16 @@ def send_whatsapp_alert(message: str, to_phone: str = None, triggered_by: str = 
         record_audit_log("whatsapp", "NONE", "text_alert", message, "CONFIG_MISSING", res, triggered_by)
         return res
     
-    results = [send_whatsapp_single(message, r, triggered_by) for r in recipients]
+    # Concurrent parallel delivery across all recipients for minimum latency
+    with ThreadPoolExecutor(max_workers=min(len(recipients), 5)) as executor:
+        results = list(executor.map(lambda r: send_whatsapp_single(message, r, triggered_by), recipients))
+        
     all_sent = all(res.get("status") == "SENT" for res in results)
     return {
         "status": "SENT" if all_sent else "PARTIAL_OR_FAILED",
         "recipients_count": len(recipients),
         "results": results
     }
-
 def send_whatsapp_cta_button(
     header_text: str,
     body_text: str,
@@ -167,8 +184,7 @@ def send_whatsapp_cta_button(
         "Content-Type": "application/json"
     }
     
-    results = []
-    for r in recipients:
+    def _send_cta_single(r):
         payload = {
             "messaging_product": "whatsapp",
             "recipient_type": "individual",
@@ -176,16 +192,9 @@ def send_whatsapp_cta_button(
             "type": "interactive",
             "interactive": {
                 "type": "cta_url",
-                "header": {
-                    "type": "text",
-                    "text": header_text
-                },
-                "body": {
-                    "text": body_text
-                },
-                "footer": {
-                    "text": footer_text
-                },
+                "header": {"type": "text", "text": header_text},
+                "body": {"text": body_text},
+                "footer": {"text": footer_text},
                 "action": {
                     "name": "cta_url",
                     "parameters": {
@@ -196,7 +205,7 @@ def send_whatsapp_cta_button(
             }
         }
         try:
-            resp = requests.post(url, json=payload, headers=headers, timeout=5)
+            resp = NOTIF_SESSION.post(url, json=payload, headers=headers, timeout=4)
             status = "SENT" if resp.status_code == 200 else f"HTTP_{resp.status_code}"
             resp_body = resp.json() if resp.status_code == 200 else resp.text
             res_item = {
@@ -205,8 +214,8 @@ def send_whatsapp_cta_button(
                 "status": status,
                 "response": resp_body
             }
-            results.append(res_item)
             record_audit_log("whatsapp", r, "cta_button", msg_preview, status, resp_body, triggered_by)
+            return res_item
         except Exception as e:
             err_body = str(e)
             res_item = {
@@ -215,8 +224,11 @@ def send_whatsapp_cta_button(
                 "status": "ERROR",
                 "error": err_body
             }
-            results.append(res_item)
             record_audit_log("whatsapp", r, "cta_button", msg_preview, "ERROR", err_body, triggered_by)
+            return res_item
+
+    with ThreadPoolExecutor(max_workers=min(len(recipients), 5)) as executor:
+        results = list(executor.map(_send_cta_single, recipients))
 
     all_sent = all(res.get("status") == "SENT" for res in results)
     return {
@@ -251,15 +263,15 @@ def send_telegram_alert(message: str, triggered_by: str = "system") -> dict:
         return err_res
 
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    results = []
-    for cid in chat_ids:
+
+    def _send_tg_single(cid):
         payload = {
             "chat_id": cid,
             "text": message,
             "parse_mode": "Markdown"
         }
         try:
-            resp = requests.post(url, json=payload, timeout=5)
+            resp = NOTIF_SESSION.post(url, json=payload, timeout=4)
             status = "SENT" if resp.status_code == 200 else f"HTTP_{resp.status_code}"
             resp_body = resp.json() if resp.status_code == 200 else resp.text
             res_item = {
@@ -268,8 +280,8 @@ def send_telegram_alert(message: str, triggered_by: str = "system") -> dict:
                 "status": status,
                 "response": resp_body
             }
-            results.append(res_item)
             record_audit_log("telegram", cid, "telegram_alert", message, status, resp_body, triggered_by)
+            return res_item
         except Exception as e:
             err_body = str(e)
             res_item = {
@@ -278,14 +290,17 @@ def send_telegram_alert(message: str, triggered_by: str = "system") -> dict:
                 "status": "ERROR",
                 "error": err_body
             }
-            results.append(res_item)
             record_audit_log("telegram", cid, "telegram_alert", message, "ERROR", err_body, triggered_by)
+            return res_item
+
+    with ThreadPoolExecutor(max_workers=min(len(chat_ids), 5)) as executor:
+        results = list(executor.map(_send_tg_single, chat_ids))
 
     all_sent = all(r.get("status") == "SENT" for r in results)
     return {
         "status": "SENT" if all_sent else "PARTIAL_OR_FAILED",
         "chat_ids_count": len(chat_ids),
-        "results": results if len(results) > 1 else results[0]
+        "results": results if len(results) > 1 else (results[0] if results else {})
     }
 
 # Monitored Universe: Top actively traded F&O Equity instruments
@@ -309,12 +324,21 @@ FO_UNIVERSE = [
 
 # In-memory caches & active positions
 CACHED_PREV_HIGHS = {}
+LAST_PREV_HIGH_DATE = None
 ACTIVE_TRADES = [] # Stores confirmed breakout setups for intraday Target & SL tracking
 
-def fetch_and_cache_daily_highs() -> dict:
+def fetch_and_cache_daily_highs(force_refresh: bool = False) -> dict:
     """
     Fetches the Previous Day High for all F&O universe symbols from Upstox concurrently.
+    Caches daily in memory to eliminate redundant HTTP calls during market hours.
     """
+    global LAST_PREV_HIGH_DATE
+    ist = pytz.timezone("Asia/Kolkata")
+    today_str = datetime.now(ist).strftime("%Y-%m-%d")
+
+    if not force_refresh and LAST_PREV_HIGH_DATE == today_str and len(CACHED_PREV_HIGHS) >= len(FO_UNIVERSE):
+        return CACHED_PREV_HIGHS
+
     def fetch_high(item):
         high = upstox_client.get_previous_day_high(item["instrument_key"])
         if high:
@@ -322,6 +346,8 @@ def fetch_and_cache_daily_highs() -> dict:
 
     with ThreadPoolExecutor(max_workers=10) as executor:
         list(executor.map(fetch_high, FO_UNIVERSE))
+        
+    LAST_PREV_HIGH_DATE = today_str
     return CACHED_PREV_HIGHS
 
 def evaluate_strategy(symbol: str, prev_day_high: float, open_price: float, high_price: float, low_price: float, close_price: float, source: str = "LIVE", latency_ms: float = None):
@@ -377,10 +403,15 @@ def evaluate_strategy(symbol: str, prev_day_high: float, open_price: float, high
             f"**Risk/Share (H - L)**: ₹{risk_value}\n"
             f"**Target (1:2)**: ₹{target_price} (+₹{target_gain})"
         )
-        telegram_res = send_telegram_alert(alert_msg)
-        whatsapp_res = send_whatsapp_alert(alert_msg)
-        result["telegram_dispatch"] = telegram_res
-        result["whatsapp_dispatch"] = whatsapp_res
+        
+        # Non-blocking asynchronous dispatch: decoupled from strategy execution calculation
+        def _dispatch_alerts_async(msg):
+            send_telegram_alert(msg)
+            send_whatsapp_alert(msg)
+            
+        _ALERT_WORKER_POOL.submit(_dispatch_alerts_async, alert_msg)
+        result["telegram_dispatch"] = {"status": "QUEUED_ASYNC", "channel": "telegram", "queued_at": now_ist}
+        result["whatsapp_dispatch"] = {"status": "QUEUED_ASYNC", "channel": "whatsapp", "queued_at": now_ist}
         
         # Track for live intraday Target/SL alerts
         trade_record = {

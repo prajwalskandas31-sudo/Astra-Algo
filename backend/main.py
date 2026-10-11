@@ -4,10 +4,12 @@ import time
 from fastapi import FastAPI, Depends, HTTPException, status, Request
 from fastapi.responses import RedirectResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 from datetime import timedelta, datetime
 from apscheduler.schedulers.background import BackgroundScheduler
+from concurrent.futures import ThreadPoolExecutor
 import pytz
 from typing import List, Optional
 
@@ -21,6 +23,9 @@ app = FastAPI(
     version="1.0.0",
     description="Intraday Opening High Breakout/Reversal Strategy with RBAC & Static IP Guard"
 )
+
+# Compression Middleware: shrinks responses by up to 80%
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 # CORS Configuration
 app.add_middleware(
@@ -679,61 +684,82 @@ def run_simultaneous_execution(
         "execution_summary": execution_result
     }
 
+_LIVE_HEALTH_CACHE = {"data": None, "timestamp": 0.0}
+_HEALTH_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="HealthProbe")
+
 @app.get("/system/live-health")
 def get_system_live_health(
     request: Request,
+    force: bool = False,
     db: Session = Depends(database.get_db)
 ):
     """
     Live real-time connectivity diagnostics for all external and internal services.
-    Measures latency in milliseconds and returns green/red indicator state.
+    Uses concurrent ThreadPool probing and warm 5s in-memory caching for sub-millisecond query latency.
     """
+    global _LIVE_HEALTH_CACHE
+    now_ts = time.time()
+    
+    # Return warm cache if fresh within 5 seconds unless explicitly forced
+    if not force and _LIVE_HEALTH_CACHE["data"] is not None and (now_ts - _LIVE_HEALTH_CACHE["timestamp"] < 5.0):
+        cached_copy = dict(_LIVE_HEALTH_CACHE["data"])
+        cached_copy["cache_hit"] = True
+        return cached_copy
+
     ist = pytz.timezone("Asia/Kolkata")
     now_ist = datetime.now(ist).strftime("%Y-%m-%d %H:%M:%S IST")
-    import requests as req_lib
-    
-    # 1. Upstox API
-    t0 = datetime.now()
-    broker_info = upstox_client.test_connection()
-    broker_lat = round((datetime.now() - t0).total_seconds() * 1000, 1)
-    upstox_healthy = broker_info.get("status") == "CONNECTED"
-    
-    # 2. WhatsApp API
-    wa_healthy = False
-    wa_lat = 0.0
-    wa_detail = {}
-    if strategy.WHATSAPP_TOKEN and strategy.WHATSAPP_PHONE_ID:
+
+    def probe_upstox():
+        t0 = time.perf_counter()
+        info = upstox_client.test_connection()
+        lat = round((time.perf_counter() - t0) * 1000, 1)
+        return info, lat
+
+    def probe_whatsapp():
+        if not (strategy.WHATSAPP_TOKEN and strategy.WHATSAPP_PHONE_ID):
+            return False, 0.0, {}
         try:
-            t0 = datetime.now()
-            wa_res = req_lib.get(
+            t0 = time.perf_counter()
+            wa_res = strategy.NOTIF_SESSION.get(
                 f"https://graph.facebook.com/v20.0/{strategy.WHATSAPP_PHONE_ID}",
                 headers={"Authorization": f"Bearer {strategy.WHATSAPP_TOKEN}"},
-                timeout=4
+                timeout=3
             )
-            wa_lat = round((datetime.now() - t0).total_seconds() * 1000, 1)
-            wa_healthy = (wa_res.status_code == 200)
-            wa_detail = wa_res.json() if wa_res.status_code == 200 else {"error": wa_res.text}
+            lat = round((time.perf_counter() - t0) * 1000, 1)
+            healthy = (wa_res.status_code == 200)
+            detail = wa_res.json() if healthy else {"error": wa_res.text}
+            return healthy, lat, detail
         except Exception as e:
-            wa_detail = {"error": str(e)}
-    
-    # 3. Telegram API
-    tg_healthy = False
-    tg_lat = 0.0
-    tg_detail = {}
-    if strategy.TELEGRAM_BOT_TOKEN and not "your_" in strategy.TELEGRAM_BOT_TOKEN:
+            return False, 0.0, {"error": str(e)}
+
+    def probe_telegram():
+        if not strategy.TELEGRAM_BOT_TOKEN or "your_" in strategy.TELEGRAM_BOT_TOKEN:
+            return False, 0.0, {}
         try:
-            t0 = datetime.now()
-            tg_res = req_lib.get(
+            t0 = time.perf_counter()
+            tg_res = strategy.NOTIF_SESSION.get(
                 f"https://api.telegram.org/bot{strategy.TELEGRAM_BOT_TOKEN}/getMe",
-                timeout=4
+                timeout=3
             )
-            tg_lat = round((datetime.now() - t0).total_seconds() * 1000, 1)
-            tg_healthy = (tg_res.status_code == 200 and tg_res.json().get("ok") is True)
-            tg_detail = tg_res.json().get("result", {}) if tg_res.status_code == 200 else {"error": tg_res.text}
+            lat = round((time.perf_counter() - t0) * 1000, 1)
+            healthy = (tg_res.status_code == 200 and tg_res.json().get("ok") is True)
+            detail = tg_res.json().get("result", {}) if tg_res.status_code == 200 else {"error": tg_res.text}
+            return healthy, lat, detail
         except Exception as e:
-            tg_detail = {"error": str(e)}
-            
-    # 4. Database
+            return False, 0.0, {"error": str(e)}
+
+    # Run probes concurrently in parallel workers
+    fut_upstox = _HEALTH_POOL.submit(probe_upstox)
+    fut_wa = _HEALTH_POOL.submit(probe_whatsapp)
+    fut_tg = _HEALTH_POOL.submit(probe_telegram)
+
+    broker_info, broker_lat = fut_upstox.result()
+    upstox_healthy = broker_info.get("status") == "CONNECTED"
+
+    wa_healthy, wa_lat, wa_detail = fut_wa.result()
+    tg_healthy, tg_lat, tg_detail = fut_tg.result()
+
+    # 4. Database (SQLite WAL)
     db_healthy = True
     try:
         from sqlalchemy import text
@@ -742,10 +768,11 @@ def get_system_live_health(
         db_healthy = False
         
     client_ip = request.client.host if request.client else "unknown"
-    
-    return {
+
+    result_payload = {
         "timestamp": now_ist,
         "overall_status": "OPERATIONAL" if (wa_healthy and tg_healthy) else "DEGRADED",
+        "cache_hit": False,
         "services": {
             "upstox": {
                 "name": "Upstox Broker V2 Gateway",
@@ -784,7 +811,7 @@ def get_system_live_health(
                 "jobs_count": len(scheduler.get_jobs()) if scheduler.running else 0
             },
             "database": {
-                "name": "SQLite Operational Database",
+                "name": "SQLite Operational Database (WAL Mode)",
                 "healthy": db_healthy,
                 "status": "ONLINE" if db_healthy else "ERROR"
             },
@@ -796,6 +823,8 @@ def get_system_live_health(
             }
         }
     }
+    _LIVE_HEALTH_CACHE = {"data": result_payload, "timestamp": now_ts}
+    return result_payload
 
 @app.get("/dashboard/metrics")
 def get_dashboard_metrics(

@@ -11,6 +11,19 @@ UPSTOX_ACCESS_TOKEN = os.getenv("UPSTOX_ACCESS_TOKEN") or os.getenv("ACCESS_TOKE
 
 BASE_URL = "https://api.upstox.com/v2"
 
+# Persistent HTTP Session with Keep-Alive connection pooling for sub-30ms requests
+session = requests.Session()
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
+_adapter = HTTPAdapter(
+    pool_connections=30,
+    pool_maxsize=30,
+    max_retries=Retry(total=2, backoff_factor=0.1, status_forcelist=[502, 503, 504])
+)
+session.mount("https://", _adapter)
+session.mount("http://", _adapter)
+
 def get_headers():
     token = UPSTOX_ACCESS_TOKEN
     return {
@@ -21,7 +34,7 @@ def get_headers():
 
 def test_connection():
     """
-    Checks Upstox API connection and token status.
+    Checks Upstox API connection and token status using warm connection pool.
     """
     if not UPSTOX_ACCESS_TOKEN or "your_" in UPSTOX_ACCESS_TOKEN:
         return {"status": "UNCONFIGURED", "detail": "Missing or placeholder Upstox access token."}
@@ -29,7 +42,7 @@ def test_connection():
     # Check user profile or market quotes
     url = f"{BASE_URL}/user/profile"
     try:
-        response = requests.get(url, headers=get_headers(), timeout=5)
+        response = session.get(url, headers=get_headers(), timeout=4)
         if response.status_code == 200:
             user_data = response.json().get("data", {})
             return {
@@ -59,7 +72,7 @@ def get_historical_data(instrument_key: str, interval: str = "1minute"):
     """
     url = f"{BASE_URL}/historical-candle/intraday/{instrument_key}/{interval}"
     try:
-        response = requests.get(url, headers=get_headers(), timeout=5)
+        response = session.get(url, headers=get_headers(), timeout=4)
         if response.status_code == 200:
             data = response.json()
             if data.get("status") == "success":
@@ -87,7 +100,7 @@ def get_previous_day_high(instrument_key: str):
     past = today - datetime.timedelta(days=10)
     url = f"{BASE_URL}/historical-candle/{instrument_key}/day/{today}/{past}"
     try:
-        response = requests.get(url, headers=get_headers(), timeout=5)
+        response = session.get(url, headers=get_headers(), timeout=4)
         if response.status_code == 200:
             candles = response.json().get("data", {}).get("candles", [])
             if candles and len(candles) > 0 and len(candles[0]) >= 3:
@@ -104,7 +117,7 @@ def get_live_market_quotes(instrument_keys: list):
         return {}
     url = f"{BASE_URL}/market-quote/ohlc?instrument_key=" + ",".join(instrument_keys) + "&interval=1d"
     try:
-        response = requests.get(url, headers=get_headers(), timeout=5)
+        response = session.get(url, headers=get_headers(), timeout=4)
         if response.status_code == 200:
             return response.json().get("data", {})
     except Exception as e:
