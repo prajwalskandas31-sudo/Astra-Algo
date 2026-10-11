@@ -39,14 +39,44 @@ def format_whatsapp_phone(phone: str) -> str:
         clean = "91" + clean
     return clean
 
-def send_whatsapp_single(message: str, recipient: str) -> dict:
+def record_audit_log(channel: str, recipient: str, message_type: str, message_preview: str, status: str, response_details: any = None, triggered_by: str = "system"):
+    """
+    Persists an audit log entry for every outbound notification attempt (WhatsApp, Telegram, etc.)
+    """
+    try:
+        from . import database, models
+        import json
+        db = database.SessionLocal()
+        ist = pytz.timezone("Asia/Kolkata")
+        now_str = datetime.now(ist).strftime("%Y-%m-%d %H:%M:%S IST")
+        
+        details_str = json.dumps(response_details) if isinstance(response_details, (dict, list)) else str(response_details or "")
+        log_entry = models.NotificationAuditLog(
+            timestamp=now_str,
+            channel=channel,
+            recipient=str(recipient),
+            message_type=message_type,
+            message_preview=str(message_preview)[:500] if message_preview else "",
+            status=status,
+            response_details=details_str[:2000] if details_str else None,
+            triggered_by=triggered_by
+        )
+        db.add(log_entry)
+        db.commit()
+        db.close()
+    except Exception as e:
+        print(f"Error persisting notification audit log: {e}")
+
+def send_whatsapp_single(message: str, recipient: str, triggered_by: str = "system") -> dict:
     if not WHATSAPP_TOKEN or not WHATSAPP_PHONE_ID or not recipient:
-        return {
+        err_res = {
             "timestamp": datetime.now(pytz.timezone("Asia/Kolkata")).isoformat(),
             "status": "CONFIG_MISSING",
             "message": "WhatsApp Token, Phone ID or recipient phone missing.",
             "recipient": recipient
         }
+        record_audit_log("whatsapp", recipient, "text_alert", message, "CONFIG_MISSING", err_res, triggered_by)
+        return err_res
     
     url = f"https://graph.facebook.com/v20.0/{WHATSAPP_PHONE_ID}/messages"
     headers = {
@@ -61,33 +91,42 @@ def send_whatsapp_single(message: str, recipient: str) -> dict:
     }
     try:
         resp = requests.post(url, json=payload, headers=headers, timeout=5)
-        return {
+        status = "SENT" if resp.status_code == 200 else f"HTTP_{resp.status_code}"
+        resp_body = resp.json() if resp.status_code == 200 else resp.text
+        result = {
             "timestamp": datetime.now(pytz.timezone("Asia/Kolkata")).isoformat(),
             "recipient": recipient,
-            "status": "SENT" if resp.status_code == 200 else f"HTTP_{resp.status_code}",
-            "response": resp.json() if resp.status_code == 200 else resp.text
+            "status": status,
+            "response": resp_body
         }
+        record_audit_log("whatsapp", recipient, "text_alert", message, status, resp_body, triggered_by)
+        return result
     except Exception as e:
-        return {
+        err_body = str(e)
+        result = {
             "timestamp": datetime.now(pytz.timezone("Asia/Kolkata")).isoformat(),
             "recipient": recipient,
             "status": "ERROR",
-            "error": str(e)
+            "error": err_body
         }
+        record_audit_log("whatsapp", recipient, "text_alert", message, "ERROR", err_body, triggered_by)
+        return result
 
-def send_whatsapp_alert(message: str, to_phone: str = None) -> dict:
+def send_whatsapp_alert(message: str, to_phone: str = None, triggered_by: str = "system") -> dict:
     target_str = to_phone or WHATSAPP_RECIPIENT_PHONE or ""
     raw_list = parse_recipient_list(target_str)
     recipients = [format_whatsapp_phone(p) for p in raw_list if format_whatsapp_phone(p)]
     
     if not recipients:
-        return {
+        res = {
             "timestamp": datetime.now(pytz.timezone("Asia/Kolkata")).isoformat(),
             "status": "CONFIG_MISSING",
             "message": "No valid WhatsApp recipient phone numbers configured."
         }
+        record_audit_log("whatsapp", "NONE", "text_alert", message, "CONFIG_MISSING", res, triggered_by)
+        return res
     
-    results = [send_whatsapp_single(message, r) for r in recipients]
+    results = [send_whatsapp_single(message, r, triggered_by) for r in recipients]
     all_sent = all(res.get("status") == "SENT" for res in results)
     return {
         "status": "SENT" if all_sent else "PARTIAL_OR_FAILED",
@@ -101,7 +140,8 @@ def send_whatsapp_cta_button(
     button_text: str,
     button_url: str,
     footer_text: str = "Astra Algo Trading Engine",
-    to_phone: str = None
+    to_phone: str = None,
+    triggered_by: str = "system"
 ) -> dict:
     """
     Sends a native interactive CTA URL button via WhatsApp Cloud API.
@@ -111,12 +151,15 @@ def send_whatsapp_cta_button(
     raw_list = parse_recipient_list(target_str)
     recipients = [format_whatsapp_phone(p) for p in raw_list if format_whatsapp_phone(p)]
     
+    msg_preview = f"[{header_text}] {body_text} -> {button_text} ({button_url})"
     if not WHATSAPP_TOKEN or not WHATSAPP_PHONE_ID or not recipients:
-        return {
+        res = {
             "timestamp": datetime.now(pytz.timezone("Asia/Kolkata")).isoformat(),
             "status": "CONFIG_MISSING",
             "message": "WhatsApp Token, Phone ID or recipient phone missing."
         }
+        record_audit_log("whatsapp", str(recipients or "NONE"), "cta_button", msg_preview, "CONFIG_MISSING", res, triggered_by)
+        return res
         
     url = f"https://graph.facebook.com/v20.0/{WHATSAPP_PHONE_ID}/messages"
     headers = {
@@ -154,19 +197,26 @@ def send_whatsapp_cta_button(
         }
         try:
             resp = requests.post(url, json=payload, headers=headers, timeout=5)
-            results.append({
+            status = "SENT" if resp.status_code == 200 else f"HTTP_{resp.status_code}"
+            resp_body = resp.json() if resp.status_code == 200 else resp.text
+            res_item = {
                 "timestamp": datetime.now(pytz.timezone("Asia/Kolkata")).isoformat(),
                 "recipient": r,
-                "status": "SENT" if resp.status_code == 200 else f"HTTP_{resp.status_code}",
-                "response": resp.json() if resp.status_code == 200 else resp.text
-            })
+                "status": status,
+                "response": resp_body
+            }
+            results.append(res_item)
+            record_audit_log("whatsapp", r, "cta_button", msg_preview, status, resp_body, triggered_by)
         except Exception as e:
-            results.append({
+            err_body = str(e)
+            res_item = {
                 "timestamp": datetime.now(pytz.timezone("Asia/Kolkata")).isoformat(),
                 "recipient": r,
                 "status": "ERROR",
-                "error": str(e)
-            })
+                "error": err_body
+            }
+            results.append(res_item)
+            record_audit_log("whatsapp", r, "cta_button", msg_preview, "ERROR", err_body, triggered_by)
 
     all_sent = all(res.get("status") == "SENT" for res in results)
     return {
@@ -175,7 +225,7 @@ def send_whatsapp_cta_button(
         "results": results
     }
 
-def send_telegram_alert(message: str) -> dict:
+def send_telegram_alert(message: str, triggered_by: str = "system") -> dict:
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID or "your_" in TELEGRAM_BOT_TOKEN:
         log_entry = {
             "timestamp": datetime.now(pytz.timezone("Asia/Kolkata")).isoformat(),
@@ -187,15 +237,18 @@ def send_telegram_alert(message: str) -> dict:
             print("Telegram configuration missing/placeholder. Alert content:\n", message.encode('ascii', errors='backslashreplace').decode('ascii'))
         except Exception:
             pass
+        record_audit_log("telegram", "LOCAL_CONSOLE", "telegram_alert", message, "CONFIG_MISSING", log_entry, triggered_by)
         return log_entry
 
     chat_ids = parse_recipient_list(TELEGRAM_CHAT_ID)
     if not chat_ids:
-        return {
+        err_res = {
             "timestamp": datetime.now(pytz.timezone("Asia/Kolkata")).isoformat(),
             "status": "CONFIG_MISSING",
             "message": "No valid Telegram chat ID configured."
         }
+        record_audit_log("telegram", "NONE", "telegram_alert", message, "CONFIG_MISSING", err_res, triggered_by)
+        return err_res
 
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     results = []
@@ -207,19 +260,26 @@ def send_telegram_alert(message: str) -> dict:
         }
         try:
             resp = requests.post(url, json=payload, timeout=5)
-            results.append({
+            status = "SENT" if resp.status_code == 200 else f"HTTP_{resp.status_code}"
+            resp_body = resp.json() if resp.status_code == 200 else resp.text
+            res_item = {
                 "timestamp": datetime.now(pytz.timezone("Asia/Kolkata")).isoformat(),
                 "chat_id": cid,
-                "status": "SENT" if resp.status_code == 200 else f"HTTP_{resp.status_code}",
-                "response": resp.json() if resp.status_code == 200 else resp.text
-            })
+                "status": status,
+                "response": resp_body
+            }
+            results.append(res_item)
+            record_audit_log("telegram", cid, "telegram_alert", message, status, resp_body, triggered_by)
         except Exception as e:
-            results.append({
+            err_body = str(e)
+            res_item = {
                 "timestamp": datetime.now(pytz.timezone("Asia/Kolkata")).isoformat(),
                 "chat_id": cid,
                 "status": "ERROR",
-                "error": str(e)
-            })
+                "error": err_body
+            }
+            results.append(res_item)
+            record_audit_log("telegram", cid, "telegram_alert", message, "ERROR", err_body, triggered_by)
 
     all_sent = all(r.get("status") == "SENT" for r in results)
     return {
