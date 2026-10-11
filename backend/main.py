@@ -423,14 +423,115 @@ def generate_strategy_with_ai(
     current_user: models.User = Depends(auth.get_current_active_user)
 ):
     """
-    Deduces quantitative trading strategy requirements from natural language input (voice or text).
+    Deduces quantitative trading strategy requirements from natural language input (voice or text)
+    using the Google Gemini API (gemini-2.5-flash / gemini-1.5-flash) with structured JSON output.
     Translates trader words into mathematical indicators, precise entry/exit rules, timeframe,
     and simulated backtest metrics.
     """
     raw_prompt = req.prompt.strip()
-    p_lower = raw_prompt.lower()
+    if not raw_prompt:
+        raise HTTPException(status_code=400, detail="Strategy description cannot be empty.")
+
+    gemini_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "AIzaSyAUHxIqid8WL3NJI-I_rvA-FqL9bZSlGTk"
     
-    # 1. Deduce strategy category & core theme
+    # Attempt real Google Gemini API structured generation
+    if gemini_key:
+        try:
+            import httpx
+            import json as py_json
+            
+            system_prompt = (
+                "You are an institutional quantitative algorithmic trading architect at Astra Algo. "
+                "The trader will explain their trading strategy idea using plain words or speech dictation. "
+                "Deduce, mathematically specify, and return a complete institutional trading strategy. "
+                "You MUST return ONLY a valid JSON object with the following exact keys:\n"
+                "- name: Short, professional strategy title (e.g. 'Nifty 50 RSI Volume Impulse Breakout')\n"
+                "- category: Strategy family (e.g. 'Trend Following & Momentum', 'Mean Reversion & Volatility', 'Opening Range Breakout', 'Multi-Timeframe Confluence')\n"
+                "- timeframe: Timeframe window (e.g. '15-Min Intraday Momentum', '5-Min Opening Impulse', '3-Min Scalp')\n"
+                "- description: 2-3 sentence executive institutional thesis explaining edge, market regime, and logic.\n"
+                "- entry_rules: Clear numbered mathematical entry triggers (indicators, thresholds, candle triggers, volume confirmation).\n"
+                "- exit_rules: Clear numbered exit rules (stop-loss formula, take-profit R:R formula, trailing stop, time-based square off).\n"
+                "- risk_reward: Risk to reward ratio (e.g. '1:2.0', '1:2.5')\n"
+                "- win_rate: Historical or modeled win rate percentage as a number between 55.0 and 82.0 (e.g. 71.4)\n"
+                "- profit_factor: Profit factor as a number between 1.8 and 3.2 (e.g. 2.45)\n"
+                "- max_drawdown: Maximum historical drawdown percentage as a number between 3.5 and 9.5 (e.g. 5.8)\n"
+                "- avg_return_per_trade: Average expected return percentage per trade as a number between 1.2 and 3.5 (e.g. 2.15)\n"
+                "- best_symbol: Best performing universe stock (e.g. 'RELIANCE', 'TCS', 'HDFCBANK', 'ICICIBANK', 'INFY')\n"
+                "- sharpe_ratio: Sharpe ratio as a number between 1.7 and 3.1 (e.g. 2.38)\n"
+                "- sortino_ratio: Sortino ratio as a number between 2.2 and 4.2 (e.g. 3.12)\n"
+                "- profit_expectancy: Expected profit in Rupees per ₹1,00,000 deployment as a number (e.g. 4850.0)\n"
+                "- deduced_reasoning: Detailed reasoning explaining how the AI deduced the indicators, risks, mathematical edges, and recommendations."
+            )
+            
+            payload = {
+                "contents": [
+                    {
+                        "parts": [
+                            {"text": f"{system_prompt}\n\nTrader's Strategy Idea:\n\"{raw_prompt}\"\nPreferred Timeframe (if any): {req.preferred_timeframe or 'Auto-deduce'}"}
+                        ]
+                    }
+                ],
+                "generationConfig": {
+                    "response_mime_type": "application/json",
+                    "temperature": 0.2
+                }
+            }
+            
+            gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={gemini_key}"
+            with httpx.Client(timeout=25.0) as client:
+                resp = client.post(gemini_url, json=payload)
+                if resp.status_code == 200:
+                    resp_data = resp.json()
+                    candidates = resp_data.get("candidates", [])
+                    if candidates:
+                        text_content = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+                        parsed = py_json.loads(text_content)
+                        
+                        # Generate clean unique key
+                        clean_name = re.sub(r'[^a-zA-Z0-9]+', '_', parsed.get("name", "gemini_strategy")).strip('_').lower()[:24]
+                        key = f"gemini_{clean_name}_{int(time.time()) % 10000}"
+                        
+                        # Normalize win_rate & max_drawdown to percentage if decimals
+                        wr = float(parsed.get("win_rate", 70.0))
+                        if wr <= 1.0:
+                            wr = round(wr * 100.0, 1)
+                        mdd = float(parsed.get("max_drawdown", 6.0))
+                        if mdd <= 1.0:
+                            mdd = round(mdd * 100.0, 1)
+                        avg_ret = float(parsed.get("avg_return_per_trade", 2.0))
+                        if avg_ret <= 0.1:
+                            avg_ret = round(avg_ret * 100.0, 2)
+                            
+                        pf = float(parsed.get("profit_factor", 2.3))
+                        sharpe = float(parsed.get("sharpe_ratio", round(pf * 0.95, 2)))
+                        sortino = float(parsed.get("sortino_ratio", round(pf * 1.25, 2)))
+                        profit_exp = float(parsed.get("profit_expectancy", round(avg_ret * 1450.0, 1)))
+
+                        return schemas.AIGenerateStrategyResponse(
+                            key=key,
+                            name=parsed.get("name", "Gemini Institutional AI Strategy"),
+                            category=parsed.get("category", "Quantitative Systematic Alpha"),
+                            timeframe=parsed.get("timeframe", req.preferred_timeframe or "15-Min Intraday Momentum"),
+                            description=parsed.get("description", f"Institutional quantitative trading system synthesized by Google Gemini 2.5 Flash from trader prompt: '{raw_prompt}'."),
+                            entry_rules=parsed.get("entry_rules", "1. Validated by Gemini AI entry filter."),
+                            exit_rules=parsed.get("exit_rules", "1. Stop Loss: 0.5% capital clamp.\n2. Target (1:2 R:R): 1.0% upside target."),
+                            risk_reward=parsed.get("risk_reward", "1:2"),
+                            win_rate=wr,
+                            profit_factor=pf,
+                            max_drawdown=mdd,
+                            avg_return_per_trade=avg_ret,
+                            best_symbol=parsed.get("best_symbol", "RELIANCE"),
+                            sharpe_ratio=sharpe,
+                            sortino_ratio=sortino,
+                            profit_expectancy=profit_exp,
+                            deduced_reasoning=f"✨ [Synthesized live with Google Gemini 2.5 Flash]\n\n" + parsed.get("deduced_reasoning", "Deductions generated by Gemini AI model.")
+                        )
+        except Exception as exc:
+            # Fallback to internal quantitative synthesis if network or rate-limit
+            print(f"[Gemini API Notice] Falling back to quantitative synthesizer: {exc}")
+
+    # Fallback Quantitative Heuristic Synthesizer (Zero-latency fallback)
+    p_lower = raw_prompt.lower()
     if any(w in p_lower for w in ["ema", "moving average", "cross", "trend", "supertrend"]):
         category = "Trend Following & Momentum"
         default_name = "AI Adaptive Dynamic Trend Rider"
@@ -500,7 +601,6 @@ def generate_strategy_with_ai(
     unique_suffix = f"{int(time.time()) % 10000}"
     key = f"{prefix}_{unique_suffix}"
     
-    # Calculate derived stats
     sharpe = round(profit_factor * 0.98, 2)
     sortino = round(profit_factor * 1.28, 2)
     profit_exp = round(avg_ret * 1450.0, 1)

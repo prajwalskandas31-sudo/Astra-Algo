@@ -1267,8 +1267,11 @@ export default function AstraTradingDesk() {
               }}
               className={`sidebar-link ${currentNav === 'builder' ? 'active' : ''}`}
             >
-              <Sparkles size={18} />
+              <Sparkles size={18} style={{ color: 'var(--accent-cyan)' }} />
               <span>Strategy Studio & AI</span>
+              <span style={{ marginLeft: 'auto', fontSize: '0.62rem', padding: '0.1rem 0.4rem', borderRadius: '4px', background: 'rgba(0,242,254,0.18)', color: 'var(--accent-cyan)', fontWeight: 800, border: '1px solid rgba(0,242,254,0.3)' }}>
+                ADD/EDIT
+              </span>
             </button>
 
             <button
@@ -1276,13 +1279,11 @@ export default function AstraTradingDesk() {
               onClick={() => setCurrentNav('runner')}
               className={`sidebar-link ${currentNav === 'runner' ? 'active' : ''}`}
             >
-              <Zap size={18} />
+              <Zap size={18} style={{ color: '#facc15' }} />
               <span>Simultaneous Runner</span>
-              {activeExecutionKeys.length > 0 && (
-                <span style={{ marginLeft: 'auto', fontSize: '0.68rem', padding: '0.1rem 0.45rem', borderRadius: '10px', background: 'rgba(0,242,254,0.15)', color: 'var(--accent-cyan)', fontWeight: 700 }}>
-                  {activeExecutionKeys.length} ACTIVE
-                </span>
-              )}
+              <span style={{ marginLeft: 'auto', fontSize: '0.62rem', padding: '0.1rem 0.4rem', borderRadius: '4px', background: 'rgba(250,204,21,0.15)', color: '#facc15', fontWeight: 800, border: '1px solid rgba(250,204,21,0.3)' }}>
+                {activeExecutionKeys.length > 0 ? `${activeExecutionKeys.length} RUNNING` : 'PARALLEL'}
+              </span>
             </button>
 
             <button
@@ -1400,9 +1401,11 @@ export default function AstraTradingDesk() {
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: '1.2rem' }}>
-            <h2 style={{ fontSize: '1.1rem', fontWeight: 700, color: '#fff', textTransform: 'capitalize' }}>
+            <h2 style={{ fontSize: '1.1rem', fontWeight: 700, color: '#fff' }}>
               {currentNav === 'dashboard' && 'Executive Desk Dashboard'}
               {currentNav === 'strategies' && 'Algorithmic Strategies Suite & Comparison'}
+              {currentNav === 'builder' && 'Strategy Studio & AI Quant Synthesizer (Add & Edit)'}
+              {currentNav === 'runner' && 'Multi-Strategy Simultaneous Execution Matrix'}
               {currentNav === 'audit' && 'Communications & Dispatch Audit Trail'}
               {currentNav === 'users' && 'Role-Based Access Control (RBAC)'}
               {currentNav === 'system' && 'Infrastructure & Live API Diagnostics'}
@@ -1884,6 +1887,57 @@ export default function AstraTradingDesk() {
                     <Layers size={16} />
                     <span>{compareMode ? 'Exit Comparison' : 'Compare Strategies'}</span>
                   </button>
+
+                  {/* Direct button to AI Strategy Studio */}
+                  <button
+                    id="btn-open-studio"
+                    onClick={() => {
+                      setCurrentNav('builder');
+                      setStudioMode('create');
+                      setEditingStratKey(null);
+                    }}
+                    style={{
+                      padding: '0.65rem 1.1rem',
+                      background: 'linear-gradient(135deg, rgba(0,242,254,0.2) 0%, rgba(79,172,254,0.15) 100%)',
+                      border: '1px solid var(--accent-cyan)',
+                      borderRadius: '6px',
+                      color: 'var(--accent-cyan)',
+                      fontSize: '0.85rem',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.45rem',
+                      marginTop: '1rem',
+                      boxShadow: '0 0 15px rgba(0,242,254,0.15)',
+                    }}
+                  >
+                    <Sparkles size={16} />
+                    <span>➕ Add & Edit with AI Studio</span>
+                  </button>
+
+                  {/* Direct button to Simultaneous Runner */}
+                  <button
+                    id="btn-open-runner"
+                    onClick={() => setCurrentNav('runner')}
+                    style={{
+                      padding: '0.65rem 1rem',
+                      background: 'rgba(250,204,21,0.08)',
+                      border: '1px solid rgba(250,204,21,0.3)',
+                      borderRadius: '6px',
+                      color: '#facc15',
+                      fontSize: '0.85rem',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.4rem',
+                      marginTop: '1rem',
+                    }}
+                  >
+                    <Zap size={16} />
+                    <span>⚡ Run Simultaneously</span>
+                  </button>
                 </div>
               </div>
 
@@ -2254,6 +2308,9 @@ export default function AstraTradingDesk() {
                     </h3>
                     <span style={{ fontSize: '0.7rem', padding: '0.2rem 0.6rem', borderRadius: '4px', background: 'rgba(0,242,254,0.1)', color: 'var(--accent-cyan)', fontWeight: 700 }}>
                       NATURAL LANGUAGE → QUANT RULES
+                    </span>
+                    <span style={{ fontSize: '0.7rem', padding: '0.2rem 0.6rem', borderRadius: '4px', background: 'rgba(59,130,246,0.15)', color: '#60a5fa', fontWeight: 700, border: '1px solid rgba(59,130,246,0.3)', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
+                      🤖 POWERED BY GOOGLE GEMINI 2.5 FLASH
                     </span>
                   </div>
                   <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>

@@ -131,9 +131,10 @@ All strategies now feature a 16-point institutional performance matrix:
 - Dedicated sidebar tab with:
   - **Natural Language Text Box**: Describe trading rules in plain words.
   - **🎙️ Web Speech API Voice Dictation**: Click microphone to dictate rules verbally.
-  - **✨ Generate & Deduce with AI**: Automated quantitative synthesis engine deducing indicators, entry/exit math, timeframe, stop-loss, take-profit, projected win rate, and risk ratios.
+  - **✨ Generate & Deduce with Google Gemini 2.5 Flash API**: Live AI synthesis using the Google Gemini 2.5 Flash endpoint (`generativelanguage.googleapis.com`) with structured JSON deduction. Automatically deduces mathematical indicators, precise entry/exit logic, timeframe, stop-loss, take-profit, projected win rate, Sharpe, Sortino, and profit expectancy.
   - **Human Review & Approval**: Operator reviews the AI deduction, edits any field if desired, and clicks **"Confirm & Add Strategy to Suite"** to save to database.
   - **Strategy Management**: Edit existing parameters or delete custom strategies.
+  - **Direct Access**: Added direct buttons on the Strategies page ("➕ Add & Edit with AI Studio") and on strategy cards ("Edit in Studio") for immediate navigation.
 
 ### E. Sidebar Section 2: Simultaneous Execution Matrix (`#nav-runner`)
 - Dedicated sidebar tab with:
@@ -141,4 +142,5 @@ All strategies now feature a 16-point institutional performance matrix:
   - **⚡ Execute Selected Strategies Concurrently (Parallel Engine)**: Backend `ThreadPoolExecutor` running multi-strategy scans across symbols in parallel without loss of accuracy, latency (<200ms), or timing precision.
   - **Save Active Execution Suite**: Persists active strategies for automated 09:16 AM scheduler execution.
   - **Real-Time Live Telemetry Feed**: Displays timestamped execution logs for all active strategies running side-by-side.
+
 
