@@ -13,7 +13,10 @@ from concurrent.futures import ThreadPoolExecutor
 import pytz
 from typing import List, Optional
 
-from . import models, schemas, auth, database, security_middleware, strategy, upstox_client, generate_token
+try:
+    from . import models, schemas, auth, database, security_middleware, strategy, upstox_client, generate_token
+except ImportError:
+    import models, schemas, auth, database, security_middleware, strategy, upstox_client, generate_token
 
 # Create database tables
 models.Base.metadata.create_all(bind=database.engine)
@@ -214,13 +217,29 @@ def get_strategy_status(current_user: models.User = Depends(auth.get_current_act
     
     return {
         "server_time_ist": now_ist,
-        "strategy_name": "Open Range Breakout (ORB)",
-        "timeframe": "1-minute (09:15 candle evaluated at 09:16:00 AM IST)",
+        "strategy_name": "Open Range Breakout (ORB) - Two-Stage Execution",
+        "timeframe": "1-minute (Phase 1 at 09:15:00 AM, Phase 2 at 09:16:00 AM IST)",
         "scheduler": {
             "status": "ACTIVE" if scheduler.running else "STOPPED",
-            "schedule": "09:16:00 AM IST (Mon-Fri)",
+            "schedule_phase1": "09:15:00 AM IST (Open < Previous Day High Filter)",
+            "schedule_phase2": "09:16:00 AM IST (Candle Close > PDH Breakout & Buy Order Execution)",
             "timezone": "Asia/Kolkata"
         },
+        "phase1_status": {
+            "condition": "opening of the stock must be below previous day high (open < prev_day_high)",
+            "tracked_stocks_count": len(strategy.PHASE1_TRACKED_STOCKS),
+            "disqualified_count": len(strategy.PHASE1_DISQUALIFIED_STOCKS),
+            "last_result": strategy.LAST_PHASE1_RESULT
+        },
+        "phase2_status": {
+            "condition": "close of 09:15 candle above previous day high (close > prev_day_high)",
+            "entry_rule": "Execute buy order at High of 09:15 candle",
+            "stop_loss_rule": "Stop loss at Low of 09:15 candle",
+            "target_rule": "Target is 2 x (High - Low of 09:15 candle)",
+            "last_result": strategy.LAST_PHASE2_RESULT
+        },
+        "active_trades_count": len(strategy.ACTIVE_TRADES),
+        "total_orders_count": len(strategy.ORDER_HISTORY),
         "broker": broker_info,
         "security": {
             "ip_guard": "ACTIVE",
@@ -229,24 +248,74 @@ def get_strategy_status(current_user: models.User = Depends(auth.get_current_act
         "recent_logs_count": len(strategy.STRATEGY_LOGS)
     }
 
+@app.post("/strategy/trigger-phase1")
+def trigger_phase1_filter(current_user: models.User = Depends(auth.get_current_active_user)):
+    """
+    Executes Phase 1 Market Open filter at 09:15 AM:
+    Identifies stocks where 'open < prev_day_high' and marks only those for Phase 2 tracking.
+    """
+    result = strategy.run_phase1_market_open_filter(force_refresh_pdh=True)
+    return {
+        "status": "COMPLETED",
+        "phase": "PHASE_1_MARKET_OPEN_FILTER",
+        "executed_by": current_user.username,
+        "role": current_user.role,
+        "result": result
+    }
+
+@app.post("/strategy/trigger-phase2")
+def trigger_phase2_execution(current_user: models.User = Depends(auth.get_current_active_user)):
+    """
+    Executes Phase 2 Candle Close check at 09:16 AM:
+    Evaluates ONLY stocks tracked from Phase 1.
+    If 'close > prev_day_high':
+    - Executes BUY order at 'High' of 9:15 candle
+    - Stop loss at 'Low' of 9:15 candle
+    - Target is 2 x (High - Low of 9:15 candle)
+    """
+    result = strategy.run_phase2_candle_close_check()
+    return {
+        "status": "COMPLETED",
+        "phase": "PHASE_2_CANDLE_CLOSE_EXECUTION",
+        "executed_by": current_user.username,
+        "role": current_user.role,
+        "result": result
+    }
+
 @app.post("/strategy/trigger")
 def trigger_strategy_check(current_user: models.User = Depends(auth.get_current_active_user)):
     """
-    Executes the Opening High Breakout scan across watchlists and returns evaluation.
+    Executes the complete Two-Stage Opening Range Breakout pipeline:
+    Phase 1 (09:15 Market Open Filter: open < PDH) -> Phase 2 (09:16 Candle Close: close > PDH & Buy at High, SL at Low, Target 2x).
     """
-    results = strategy.run_strategy_check()
+    pipeline_result = strategy.run_strategy_pipeline(force_refresh_pdh=True)
     return {
         "status": "COMPLETED",
         "executed_by": current_user.username,
         "role": current_user.role,
-        "evaluations": results
+        "pipeline": pipeline_result,
+        "evaluations": pipeline_result.get("evaluations", [])
     }
+
+@app.get("/strategy/orders")
+def get_strategy_orders(db: Session = Depends(database.get_db), current_user: models.User = Depends(auth.get_current_active_user)):
+    """
+    Returns history of trade orders executed on confirmed 09:15 breakout setups.
+    """
+    db_orders = db.query(models.OrderAuditLog).order_by(models.OrderAuditLog.id.desc()).limit(100).all()
+    if not db_orders:
+        return strategy.ORDER_HISTORY
+    return db_orders
 
 @app.get("/strategy/logs")
 def get_strategy_logs(current_user: models.User = Depends(auth.get_current_active_user)):
     return {
-        "logs": strategy.STRATEGY_LOGS
+        "logs": strategy.STRATEGY_LOGS,
+        "active_trades": strategy.ACTIVE_TRADES,
+        "phase1_tracked": strategy.PHASE1_TRACKED_STOCKS,
+        "orders": strategy.ORDER_HISTORY
     }
+
 
 @app.get("/notifications/audit-logs", response_model=List[schemas.NotificationAuditLogOut])
 def get_audit_logs(
@@ -977,13 +1046,14 @@ def startup_event():
     seed_strategies = [
         {
             "key": "open_range_breakout",
-            "name": "Open Range Breakout (ORB)",
+            "name": "Open Range Breakout (ORB) - Two-Stage",
             "category": "Intraday Momentum Breakout",
-            "timeframe": "1-Min (09:15 candle evaluated at 09:16 AM)",
-            "description": "The flagship Astra Algo strategy. Monitors the first 1-minute opening range candle (09:15-09:16 IST). When price opens below Previous Day High (PDH) and closes decisively above PDH with strong buy-side momentum, an instant Long breakout entry is triggered. Stop Loss is clamped at the 09:15 candle Low, and Target is mathematically calibrated to 1:2 Risk-Reward (Entry + 2 * (High - Low)).",
-            "entry_rules": "1. 09:15 Candle Open < Previous Day High (PDH)\n2. 09:15 Candle Close > Previous Day High (PDH)\n3. Evaluation happens at 09:16:00 AM IST sharp across F&O leaders universe.\n4. Real-time institutional volume exceeds 20-period moving average.",
-            "exit_rules": "1. Stop Loss: 09:15 Candle Low (Capital protected)\n2. Target (1:2 R:R): Entry + (2 * Risk per share)\n3. Time-based EOD Exit: 15:15 IST auto-square off.",
+            "timeframe": "1-Min (Phase 1: 09:15 AM Open | Phase 2: 09:16 AM Close)",
+            "description": "High-speed two-stage execution engine. At 09:15:00 AM market open, filters for stocks opening below Previous Day High (Open < PDH). At 09:16:00 AM candle close, tracks only those qualifying stocks for a close above PDH (Close > PDH). On confirmed breakout, an instant Buy order is executed at the 09:15 candle High, Stop Loss at 09:15 candle Low, and Target at 2x (High - Low).",
+            "entry_rules": "1. Phase 1 (09:15:00 AM Market Open): Stock Open price < Previous Day High (PDH). Disqualifies stocks opening above PDH.\n2. Phase 2 (09:16:00 AM Candle Close): 09:15 Candle Close > Previous Day High (PDH).\n3. Entry Execution: Instant BUY order executed at High of 09:15 candle.",
+            "exit_rules": "1. Stop Loss: Low of 09:15 candle (Capital protected)\n2. Target (1:2 R:R): Entry + 2 * (09:15 High - 09:15 Low)\n3. Intraday auto-square off at 15:15 IST.",
             "risk_reward": "1:2",
+
             "win_rate": 78.4,
             "total_checks": 1480,
             "correct_hits": 1160,
@@ -1176,16 +1246,29 @@ def startup_event():
             id='morning_briefing',
             replace_existing=True
         )
-        # 2. 09:16 AM: Primary Opening High Breakout scan across all F&O stocks
+        # 2. 09:15:00 AM: Phase 1 Market Open filter ("open of stock must be below previous day high")
         scheduler.add_job(
-            strategy.market_open_job, 
+            strategy.phase1_market_open_job, 
+            'cron', 
+            day_of_week='mon-fri', 
+            hour=9, 
+            minute=15,
+            second=0,
+            id='market_open_phase1_filter',
+            replace_existing=True
+        )
+        # 3. 09:16:00 AM: Phase 2 Candle Close Breakout & Order Execution (tracks only Phase 1 stocks, close > PDH, Buy at High, SL at Low, Target 2x)
+        scheduler.add_job(
+            strategy.phase2_candle_close_job, 
             'cron', 
             day_of_week='mon-fri', 
             hour=9, 
             minute=16,
-            id='market_open_scan',
+            second=0,
+            id='candle_close_phase2_execution',
             replace_existing=True
         )
+
         # 3. 09:17 - 15:15: Intraday 1-minute Target & Stop Loss monitor for active setups
         scheduler.add_job(
             strategy.intraday_trade_monitor_job,

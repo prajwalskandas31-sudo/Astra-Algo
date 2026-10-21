@@ -1,6 +1,9 @@
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
-from .models import RoleEnum
+try:
+    from .models import RoleEnum
+except ImportError:
+    from models import RoleEnum
 
 class UserBase(BaseModel):
     username: str
@@ -131,3 +134,30 @@ class AIGenerateStrategyResponse(BaseModel):
 
 class SetActiveExecutionRequest(BaseModel):
     strategy_keys: List[str]
+
+class OrderAuditLogOut(BaseModel):
+    id: int
+    timestamp: str
+    symbol: str
+    instrument_key: str
+    order_id: str
+    side: str
+    order_type: str
+    entry_price: float
+    stop_loss: float
+    target_price: float
+    risk_per_share: float
+    candle_open: float
+    candle_high: float
+    candle_low: float
+    candle_close: float
+    prev_day_high: float
+    status: str
+    execution_latency_ms: float
+    broker_status: str
+    mode: str
+    details: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+

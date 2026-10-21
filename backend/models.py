@@ -1,6 +1,12 @@
 from sqlalchemy import Boolean, Column, Integer, Float, String, Text, Enum
-from .database import Base
 import enum
+
+try:
+    from .database import Base
+except ImportError:
+    from database import Base
+
+
 
 class RoleEnum(str, enum.Enum):
     super_admin = "super_admin"
@@ -61,3 +67,29 @@ class Strategy(Base):
     created_by = Column(String, default="system")  # system, user, ai_generated
     ai_prompt = Column(Text, nullable=True)
     rank = Column(Integer, default=1)
+
+class OrderAuditLog(Base):
+    __tablename__ = "order_audit_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    timestamp = Column(String, index=True)
+    symbol = Column(String, index=True)
+    instrument_key = Column(String)
+    order_id = Column(String, index=True)
+    side = Column(String, default="BUY")
+    order_type = Column(String, default="LIMIT")
+    entry_price = Column(Float)  # High of 9:15 candle
+    stop_loss = Column(Float)    # Low of 9:15 candle
+    target_price = Column(Float) # Entry + 2 * (High - Low)
+    risk_per_share = Column(Float)  # High - Low
+    candle_open = Column(Float)
+    candle_high = Column(Float)
+    candle_low = Column(Float)
+    candle_close = Column(Float)
+    prev_day_high = Column(Float)
+    status = Column(String, default="ORDER_PLACED")  # ORDER_PLACED, FILLED, TARGET_HIT, STOP_LOSS_HIT
+    execution_latency_ms = Column(Float)
+    broker_status = Column(String, default="FILLED")
+    mode = Column(String, default="LIVE_ORB")
+    details = Column(Text, nullable=True)
+

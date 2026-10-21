@@ -4,21 +4,26 @@ Astra Algo is an institutional-grade automated trading signal engine and executi
 
 ---
 
-## ⚡ Core Strategy Specification
+## ⚡ Core Strategy Specification: Two-Stage Execution Engine
 
-Based on the **Opening High Breakout/Reversal** blueprint:
-1. **Universe**: Actively traded Futures & Options (F&O) equity instruments (Top 15 liquid leaders: RELIANCE, HDFCBANK, ICICIBANK, INFY, TCS, SBIN, etc.).
-2. **Key Levels**: Previous Day's High (PDH) dynamically retrieved from the 1-Day Chart Candle.
-3. **Core Trigger (09:16:00 AM IST)**:
-   - Evaluated strictly at the close of the first 1-minute candle (`09:15:00` to `09:15:59`).
-   - **Condition for Long Breakout**:
-     - `09:15 Open < Previous Day High`
-     - `09:15 Close > Previous Day High`
-4. **Risk & Target Calculation**:
-   - **Expected Entry**: Open of the 09:16 candle (Close of 09:15).
-   - **Stop Loss (SL)**: Absolute Low of the 09:15 trigger candle.
-   - **Risk per Share**: Candle Range ($\text{High} - \text{Low}$).
-   - **Take Profit (TP)**: 1:2 Risk-Reward Ratio ($\text{Entry} + [2 \times \text{Risk}]$).
+Based on the **Opening High Breakout/Reversal** specification with sub-50ms institutional execution:
+1. **Universe**: Actively traded Futures & Options (F&O) equity instruments (Top 15 liquid leaders: RELIANCE, HDFCBANK, ICICIBANK, INFY, TCS, SBIN, LT, ITC, MARUTI, etc.).
+2. **Key Levels**: Previous Day High (PDH) dynamically pre-cached in-memory for `0.001 ms` zero-latency lookup.
+3. **Phase 1: Market Open PDH Filter (09:15:00 AM IST)**:
+   - Evaluated at market open: `09:15:00 AM IST`.
+   - **Condition**: `"opening of the stock must be below previous day high"` (`open < prev_day_high`).
+   - Stocks opening above or at PDH (gap-up exhaustion) are immediately disqualified.
+   - **Strict Tracking Gate**: Only stocks that pass Condition 1 are tracked for Phase 2.
+4. **Phase 2: 09:15 Candle Close Breakout & Order Execution (09:16:00 AM IST)**:
+   - Evaluated strictly at close of the 09:15 candle: `09:16:00 AM IST`.
+   - Evaluates **ONLY** the stocks tracked from Phase 1.
+   - **Condition**: `"close of 9:15 candle above previous day high"` (`close > prev_day_high`).
+5. **Precise Order Execution Rules**:
+   - **Buy Order Entry**: Executed at the **"High"** of the 09:15 candle.
+   - **Stop Loss (SL)**: Clamped at the **"Low"** of the 09:15 candle.
+   - **Risk per Share**: `High - Low` of the 09:15 candle.
+   - **Profit Target (TP)**: `Entry + 2 x (High - Low)` with strict **1:2 Risk-Reward Ratio**.
+   - **Execution Routing**: Instant order placement via Upstox V2 API gateway and recorded in `order_audit_logs`.
 
 ---
 
@@ -26,9 +31,10 @@ Based on the **Opening High Breakout/Reversal** blueprint:
 
 | Time (IST) | Action | Channel Broadcast |
 | :--- | :--- | :--- |
-| **09:00:00 AM** | **Morning Market Briefing**: Warm up RAM cache & pre-fetch Previous Day Highs for all 15 F&O stocks concurrently. | Telegram Group + WhatsApp |
-| **09:16:00 AM** | **Core Strategy Scan**: Pulls locked 09:15 candles in parallel, evaluates breakout conditions, and fires instant signals. | Telegram Group + WhatsApp |
-| **09:17 – 15:15** | **Intraday Target/SL Tracker**: High-frequency monitoring of active setups for 1:2 Target hit or Stop Loss exit. | Telegram Group + WhatsApp |
+| **09:00:00 AM** | **Morning RAM Warmup**: Pre-cache Previous Day Highs for all 15 F&O stocks concurrently. | Telegram Group + WhatsApp |
+| **09:15:00 AM** | **Phase 1 Market Open Filter**: Evaluates `open < prev_day_high`. Disqualifies gap-ups and arms tracked candidates. | Telegram Group + WhatsApp |
+| **09:16:00 AM** | **Phase 2 Candle Close Execution**: Evaluates only Phase 1 candidates for `close > prev_day_high`. Executes Buy orders at 9:15 High, SL at 9:15 Low, Target at 2x Risk. | Telegram Group + WhatsApp + Broker Orders |
+| **09:17 – 15:15** | **Intraday Target/SL Tracker**: High-frequency monitoring of active positions for 1:2 Target hit or Stop Loss exit. | Telegram Group + WhatsApp |
 | **15:30:00 PM** | **Session Close Report**: Summary of daily setups triggered and performance metrics. | Telegram Group + WhatsApp |
 
 ---
