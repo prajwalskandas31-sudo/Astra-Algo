@@ -1046,14 +1046,13 @@ def startup_event():
     seed_strategies = [
         {
             "key": "open_range_breakout",
-            "name": "Open Range Breakout (ORB) - Two-Stage",
-            "category": "Intraday Momentum Breakout",
-            "timeframe": "1-Min (Phase 1: 09:15 AM Open | Phase 2: 09:16 AM Close)",
-            "description": "High-speed two-stage execution engine. At 09:15:00 AM market open, filters for stocks opening below Previous Day High (Open < PDH). At 09:16:00 AM candle close, tracks only those qualifying stocks for a close above PDH (Close > PDH). On confirmed breakout, an instant Buy order is executed at the 09:15 candle High, Stop Loss at 09:15 candle Low, and Target at 2x (High - Low).",
-            "entry_rules": "1. Phase 1 (09:15:00 AM Market Open): Stock Open price < Previous Day High (PDH). Disqualifies stocks opening above PDH.\n2. Phase 2 (09:16:00 AM Candle Close): 09:15 Candle Close > Previous Day High (PDH).\n3. Entry Execution: Instant BUY order executed at High of 09:15 candle.",
-            "exit_rules": "1. Stop Loss: Low of 09:15 candle (Capital protected)\n2. Target (1:2 R:R): Entry + 2 * (09:15 High - 09:15 Low)\n3. Intraday auto-square off at 15:15 IST.",
+            "name": "1-Minute Open Range Breakout (ORB) Strategy",
+            "category": "Opening Range Breakout (ORB)",
+            "timeframe": "1-Minute Chart (09:15 AM Opening Candle)",
+            "description": "1-Minute Open Range Breakout (ORB) Strategy executing exclusively on the Nifty 50 universe. At market open (09:15 AM), the 09:15 AM 1-minute candle must open below Previous Day High (PDH) and close above PDH. An automated buy order is placed at the high of the 09:15 AM candle (triggers on break above the high), with Stop Loss set at the low of the 09:15 AM candle. Target is calibrated at 2×R above the entry level (Risk Range R = Candle High - Candle Low) for a disciplined 1:2 Risk-to-Reward ratio.",
+            "entry_rules": "1. Setup & Universe: Nifty 50 stocks exclusively.\n2. Timeframe: 1-minute chart.\n3. Qualifying Condition: At market open (9:15 AM), the 9:15 AM candle must open below Previous Day High (PDH) and close above the PDH (Open < PDH and Close > PDH).\n4. Entry Execution: Place a buy order at the high of the 9:15 AM candle (triggers on a break above the high).",
+            "exit_rules": "1. Stop Loss (SL): Set the stop loss at the low of the 9:15 AM candle (Capital protection).\n2. Risk Range (R): Candle High - Candle Low (height of the 9:15 AM candle).\n3. Profit Target: Set target at 2×R above the entry level (Entry + 2*R), achieving a strict 1:2 Risk-to-Reward ratio.\n4. Intraday auto-square off at 15:15 IST.",
             "risk_reward": "1:2",
-
             "win_rate": 78.4,
             "total_checks": 1480,
             "correct_hits": 1160,

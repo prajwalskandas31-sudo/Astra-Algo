@@ -99,12 +99,12 @@ const DEFAULT_STRATEGIES: StrategyItem[] = [
   {
     id: 1,
     key: "open_range_breakout",
-    name: "Open Range Breakout (ORB)",
-    category: "Intraday Momentum Breakout",
-    timeframe: "1-Min (09:15 candle evaluated at 09:16 AM)",
-    description: "The flagship Astra Algo strategy. Monitors the first 1-minute opening range candle (09:15-09:16 IST). When price opens below Previous Day High (PDH) and closes decisively above PDH with strong buy-side momentum, an instant Long breakout entry is triggered. Stop Loss is clamped at the 09:15 candle Low, and Target is mathematically calibrated to 1:2 Risk-Reward (Entry + 2 * (High - Low)).",
-    entry_rules: "1. 09:15 Candle Open < Previous Day High (PDH)\n2. 09:15 Candle Close > Previous Day High (PDH)\n3. Evaluation happens at 09:16:00 AM IST sharp across F&O leaders universe.\n4. Real-time institutional volume exceeds 20-period moving average.",
-    exit_rules: "1. Stop Loss: 09:15 Candle Low (Capital protected)\n2. Target (1:2 R:R): Entry + (2 * Risk per share)\n3. Time-based EOD Exit: 15:15 IST auto-square off.",
+    name: "1-Minute Open Range Breakout (ORB) Strategy",
+    category: "Opening Range Breakout (ORB)",
+    timeframe: "1-Minute Chart (09:15 AM Opening Candle)",
+    description: "1-Minute Open Range Breakout (ORB) Strategy executing exclusively on the Nifty 50 universe. At market open (09:15 AM), the 09:15 AM 1-minute candle must open below Previous Day High (PDH) and close above PDH. An automated buy order is placed at the high of the 09:15 AM candle (triggers on break above the high), with Stop Loss set at the low of the 09:15 AM candle. Target is calibrated at 2×R above the entry level (Risk Range R = Candle High - Candle Low) for a disciplined 1:2 Risk-to-Reward ratio.",
+    entry_rules: "1. Setup & Universe: Nifty 50 stocks exclusively.\n2. Timeframe: 1-minute chart.\n3. Qualifying Condition: At market open (9:15 AM), the 9:15 AM candle must open below Previous Day High (PDH) and close above the PDH (Open < PDH and Close > PDH).\n4. Entry Order: Place a buy order at the high of the 9:15 AM candle (triggers on a break above the high).",
+    exit_rules: "1. Stop Loss (SL): Set the stop loss at the low of the 9:15 AM candle (Capital protected).\n2. Risk Range (R): Candle High - Candle Low (the height of the 9:15 AM candle).\n3. Profit Target: Set target at 2×R above the entry level (Entry + 2*R) achieving a strict 1:2 Risk-to-Reward ratio.\n4. Intraday auto-square off at 15:15 IST.",
     risk_reward: "1:2",
     win_rate: 78.4,
     total_checks: 1480,
@@ -2028,41 +2028,44 @@ export default function AstraTradingDesk() {
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                       <Clock size={18} style={{ color: 'var(--accent-cyan)' }} />
                       <h4 style={{ fontSize: '1.05rem', fontWeight: 700, color: '#fff' }}>
-                        Phase 1: Market Open PDH Filter
+                        Phase 1: Market Open PDH Filter (Nifty 50 Exclusively)
                       </h4>
                     </div>
                     <span style={{ fontSize: '0.7rem', padding: '0.15rem 0.5rem', borderRadius: '4px', background: 'rgba(0, 242, 254, 0.12)', color: 'var(--accent-cyan)', fontWeight: 700 }}>
-                      09:15:00 AM IST
+                      09:15:00 AM IST (1-Min Chart)
                     </span>
                   </div>
 
                   <div style={{ padding: '0.65rem 0.85rem', background: 'rgba(0, 0, 0, 0.35)', borderRadius: '6px', marginBottom: '0.9rem', border: '1px solid var(--border-subtle)' }}>
                     <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)', textTransform: 'uppercase', marginBottom: '0.2rem' }}>
-                      Required Rule Condition:
+                      Qualifying Rule Condition (At Market Open 9:15 AM):
                     </div>
                     <div className="mono" style={{ fontSize: '0.84rem', color: '#fff', fontWeight: 600 }}>
-                      <code>opening of the stock must be below previous day high</code> (<code>open &lt; prev_day_high</code>)
+                      <code>9:15 AM candle must open below Previous Day High (PDH)</code> (<code>open &lt; prev_day_high</code>)
+                    </div>
+                    <div style={{ fontSize: '0.7rem', color: 'var(--accent-cyan)', marginTop: '0.25rem' }}>
+                      Asset Class: <b>Nifty 50 stocks exclusively</b>. Stocks opening ≥ PDH are disqualified.
                     </div>
                   </div>
 
                   {/* Phase 1 Metrics Row */}
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.6rem', marginBottom: '1rem' }}>
                     <div style={{ padding: '0.6rem', background: 'rgba(255, 255, 255, 0.03)', borderRadius: '6px', textAlign: 'center' }}>
-                      <span style={{ fontSize: '0.65rem', color: 'var(--text-dim)', display: 'block' }}>UNIVERSE</span>
+                      <span style={{ fontSize: '0.65rem', color: 'var(--text-dim)', display: 'block' }}>NIFTY 50 UNIVERSE</span>
                       <span className="mono" style={{ fontSize: '1.1rem', fontWeight: 800, color: '#fff' }}>
-                        {phase1Data?.total_universe_scanned ?? 15}
+                        {phase1Data?.total_universe_scanned ?? 50}
                       </span>
                     </div>
                     <div style={{ padding: '0.6rem', background: 'rgba(16, 185, 129, 0.08)', border: '1px solid rgba(16, 185, 129, 0.2)', borderRadius: '6px', textAlign: 'center' }}>
-                      <span style={{ fontSize: '0.65rem', color: 'var(--accent-green)', display: 'block', fontWeight: 700 }}>TRACKED</span>
+                      <span style={{ fontSize: '0.65rem', color: 'var(--accent-green)', display: 'block', fontWeight: 700 }}>QUALIFIED (OPEN &lt; PDH)</span>
                       <span className="mono" style={{ fontSize: '1.1rem', fontWeight: 800, color: 'var(--accent-green)' }}>
-                        {phase1Data?.tracked_stocks_count ?? 9}
+                        {phase1Data?.tracked_stocks_count ?? 38}
                       </span>
                     </div>
                     <div style={{ padding: '0.6rem', background: 'rgba(244, 63, 94, 0.08)', border: '1px solid rgba(244, 63, 94, 0.2)', borderRadius: '6px', textAlign: 'center' }}>
-                      <span style={{ fontSize: '0.65rem', color: '#fca5a5', display: 'block', fontWeight: 700 }}>DISQUALIFIED</span>
+                      <span style={{ fontSize: '0.65rem', color: '#fca5a5', display: 'block', fontWeight: 700 }}>DISQUALIFIED (≥ PDH)</span>
                       <span className="mono" style={{ fontSize: '1.1rem', fontWeight: 800, color: '#fca5a5' }}>
-                        {phase1Data?.disqualified_stocks_count ?? 6}
+                        {phase1Data?.disqualified_stocks_count ?? 12}
                       </span>
                     </div>
                   </div>
@@ -2082,7 +2085,7 @@ export default function AstraTradingDesk() {
                         cursor: 'pointer',
                       }}
                     >
-                      ✓ Tracked for Phase 2 ({phase1Data?.tracked_stocks_count ?? 9})
+                      ✓ Tracked for Phase 2 ({phase1Data?.tracked_stocks_count ?? 38})
                     </button>
                     <button
                       onClick={() => setPhase1ActiveTab('disqualified')}
@@ -2097,7 +2100,7 @@ export default function AstraTradingDesk() {
                         cursor: 'pointer',
                       }}
                     >
-                      ✗ Disqualified (Gapped Above) ({phase1Data?.disqualified_stocks_count ?? 6})
+                      ✗ Disqualified (Open ≥ PDH) ({phase1Data?.disqualified_stocks_count ?? 12})
                     </button>
                   </div>
 
@@ -2105,16 +2108,19 @@ export default function AstraTradingDesk() {
                   <div style={{ maxHeight: '220px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.45rem', paddingRight: '0.3rem' }}>
                     {phase1ActiveTab === 'tracked' ? (
                       (phase1Data?.tracked_stocks || [
-                        { symbol: 'RELIANCE', open: 2490.0, prev_day_high: 2500.0, diff: -10.0 },
+                        { symbol: 'RELIANCE', open: 2492.5, prev_day_high: 2500.0, diff: -7.5 },
                         { symbol: 'TCS', open: 3940.0, prev_day_high: 3950.0, diff: -10.0 },
-                        { symbol: 'INFY', open: 1880.0, prev_day_high: 1890.0, diff: -10.0 },
-                        { symbol: 'BHARTIARTL', open: 1672.0, prev_day_high: 1680.0, diff: -8.0 },
+                        { symbol: 'INFY', open: 1882.0, prev_day_high: 1895.0, diff: -13.0 },
                         { symbol: 'LT', open: 3610.0, prev_day_high: 3620.0, diff: -10.0 },
                         { symbol: 'ITC', open: 488.5, prev_day_high: 490.0, diff: -1.5 },
-                        { symbol: 'TATAMOTORS', open: 932.0, prev_day_high: 940.0, diff: -8.0 },
                         { symbol: 'TATASTEEL', open: 153.5, prev_day_high: 155.0, diff: -1.5 },
                         { symbol: 'MARUTI', open: 12380.0, prev_day_high: 12400.0, diff: -20.0 },
-                      ]).map((stk, idx) => (
+                        { symbol: 'BEL', open: 292.0, prev_day_high: 295.0, diff: -3.0 },
+                        { symbol: 'TRENT', open: 7610.0, prev_day_high: 7650.0, diff: -40.0 },
+                        { symbol: 'HCLTECH', open: 1828.0, prev_day_high: 1840.0, diff: -12.0 },
+                        { symbol: 'SUNPHARMA', open: 1865.0, prev_day_high: 1880.0, diff: -15.0 },
+                        { symbol: 'TITAN', open: 3430.0, prev_day_high: 3450.0, diff: -20.0 },
+                      ]).map((stk: any, idx: number) => (
                         <div
                           key={idx}
                           style={{
@@ -2131,23 +2137,25 @@ export default function AstraTradingDesk() {
                           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                             <span style={{ fontWeight: 800, color: '#fff' }}>{stk.symbol}</span>
                             <span style={{ fontSize: '0.68rem', color: 'var(--text-dim)' }}>
-                              Open: <b>₹{stk.open}</b> vs PDH: <b>₹{stk.prev_day_high}</b>
+                              Open: <b>₹{stk.open_price ?? stk.open}</b> vs PDH: <b>₹{stk.prev_day_high}</b>
                             </span>
                           </div>
                           <span className="mono" style={{ color: 'var(--accent-green)', fontWeight: 700, fontSize: '0.74rem' }}>
-                            -₹{Math.abs(stk.diff).toFixed(2)} Below PDH ✓
+                            -₹{Math.abs(stk.delta_from_pdh ?? stk.diff ?? 0).toFixed(2)} Below PDH ✓
                           </span>
                         </div>
                       ))
                     ) : (
                       (phase1Data?.disqualified_stocks || [
-                        { symbol: 'HDFCBANK', open: 1715.0, prev_day_high: 1710.0, diff: 5.0 },
-                        { symbol: 'ICICIBANK', open: 1270.0, prev_day_high: 1265.0, diff: 5.0 },
-                        { symbol: 'SBIN', open: 825.0, prev_day_high: 820.0, diff: 5.0 },
-                        { symbol: 'HINDUNILVR', open: 2470.0, prev_day_high: 2465.0, diff: 5.0 },
-                        { symbol: 'AXISBANK', open: 1195.0, prev_day_high: 1190.0, diff: 5.0 },
-                        { symbol: 'KOTAKBANK', open: 1810.0, prev_day_high: 1805.0, diff: 5.0 },
-                      ]).map((stk, idx) => (
+                        { symbol: 'HDFCBANK', open: 1658.0, prev_day_high: 1650.0, diff: 8.0 },
+                        { symbol: 'ICICIBANK', open: 1245.0, prev_day_high: 1240.0, diff: 5.0 },
+                        { symbol: 'SBIN', open: 798.5, prev_day_high: 795.0, diff: 3.5 },
+                        { symbol: 'AXISBANK', open: 1184.0, prev_day_high: 1180.0, diff: 4.0 },
+                        { symbol: 'KOTAKBANK', open: 1785.0, prev_day_high: 1780.0, diff: 5.0 },
+                        { symbol: 'BAJFINANCE', open: 7165.0, prev_day_high: 7150.0, diff: 15.0 },
+                        { symbol: 'HINDUNILVR', open: 2470.0, prev_day_high: 2460.0, diff: 10.0 },
+                        { symbol: 'ADANIENT', open: 3135.0, prev_day_high: 3120.0, diff: 15.0 },
+                      ]).map((stk: any, idx: number) => (
                         <div
                           key={idx}
                           style={{
@@ -2164,11 +2172,11 @@ export default function AstraTradingDesk() {
                           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                             <span style={{ fontWeight: 800, color: '#fff' }}>{stk.symbol}</span>
                             <span style={{ fontSize: '0.68rem', color: 'var(--text-dim)' }}>
-                              Open: <b>₹{stk.open}</b> vs PDH: <b>₹{stk.prev_day_high}</b>
+                              Open: <b>₹{stk.open_price ?? stk.open}</b> vs PDH: <b>₹{stk.prev_day_high}</b>
                             </span>
                           </div>
                           <span className="mono" style={{ color: '#fca5a5', fontWeight: 700, fontSize: '0.74rem' }}>
-                            +₹{stk.diff.toFixed(2)} Gapped Above ✗
+                            +₹{Math.abs(stk.delta_from_pdh ?? stk.diff ?? 0).toFixed(2)} Gapped Above ✗
                           </span>
                         </div>
                       ))
@@ -2188,43 +2196,47 @@ export default function AstraTradingDesk() {
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                       <TrendingUp size={18} style={{ color: 'var(--accent-green)' }} />
                       <h4 style={{ fontSize: '1.05rem', fontWeight: 700, color: '#fff' }}>
-                        Phase 2: Candle Close & Buy Execution
+                        Phase 2: 09:15 Candle Close Breakout & Execution
                       </h4>
                     </div>
                     <span style={{ fontSize: '0.7rem', padding: '0.15rem 0.5rem', borderRadius: '4px', background: 'rgba(16, 185, 129, 0.15)', color: 'var(--accent-green)', fontWeight: 700 }}>
-                      09:16:00 AM IST
+                      09:16:00 AM IST (Close of 09:15 Candle)
                     </span>
                   </div>
 
                   <div style={{ padding: '0.65rem 0.85rem', background: 'rgba(0, 0, 0, 0.35)', borderRadius: '6px', marginBottom: '0.9rem', border: '1px solid var(--border-subtle)' }}>
                     <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)', textTransform: 'uppercase', marginBottom: '0.2rem' }}>
-                      Target Rule Condition:
+                      Qualifying Breakout Condition:
                     </div>
                     <div className="mono" style={{ fontSize: '0.84rem', color: '#fff', fontWeight: 600 }}>
-                      <code>close of 9:15 candle above previous day high</code> (<code>close &gt; prev_day_high</code>)
+                      <code>9:15 AM candle must close above Previous Day High (PDH)</code> (<code>close &gt; prev_day_high</code>)
                     </div>
                     <div style={{ fontSize: '0.7rem', color: 'var(--accent-cyan)', marginTop: '0.3rem' }}>
-                      ⚡ Evaluates <b>ONLY</b> the {phase1Data?.tracked_stocks_count ?? 9} stocks qualified from Phase 1.
+                      ⚡ Evaluates <b>ONLY</b> qualifying Nifty 50 stocks from Phase 1 (open &lt; PDH).
                     </div>
                   </div>
 
                   {/* Trade Parameters Callout */}
                   <div style={{ padding: '0.8rem', background: 'linear-gradient(135deg, rgba(0, 242, 254, 0.08) 0%, rgba(16, 185, 129, 0.08) 100%)', border: '1px solid rgba(0, 242, 254, 0.3)', borderRadius: '8px', marginBottom: '1rem' }}>
                     <div style={{ fontSize: '0.72rem', fontWeight: 800, color: 'var(--accent-cyan)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '0.5rem' }}>
-                      Automated Execution Parameters:
+                      Exact 1-Min ORB Execution & Target Rules:
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', fontSize: '0.78rem' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                         <span style={{ color: 'var(--text-muted)' }}>🎯 Buy Order Entry:</span>
-                        <span className="mono" style={{ color: '#fff', fontWeight: 700 }}>At "High" of 09:15 candle</span>
+                        <span className="mono" style={{ color: '#fff', fontWeight: 700 }}>At High of 9:15 AM candle (triggers on break above High)</span>
                       </div>
                       <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                        <span style={{ color: 'var(--text-muted)' }}>🛑 Stop Loss Level:</span>
-                        <span className="mono" style={{ color: '#fca5a5', fontWeight: 700 }}>At "Low" of 09:15 candle</span>
+                        <span style={{ color: 'var(--text-muted)' }}>🛑 Stop Loss (SL):</span>
+                        <span className="mono" style={{ color: '#fca5a5', fontWeight: 700 }}>At Low of 9:15 AM candle (Capital protected)</span>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <span style={{ color: 'var(--text-muted)' }}>📏 Risk Range (R):</span>
+                        <span className="mono" style={{ color: 'var(--accent-cyan)', fontWeight: 700 }}>"Candle High" - "Candle Low" (Height of 9:15 candle)</span>
                       </div>
                       <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                         <span style={{ color: 'var(--text-muted)' }}>🏆 Profit Target:</span>
-                        <span className="mono" style={{ color: 'var(--accent-green)', fontWeight: 700 }}>2 x (High - Low) [1:2 R:R]</span>
+                        <span className="mono" style={{ color: 'var(--accent-green)', fontWeight: 700 }}>Entry + 2×R (1:2 Risk-to-Reward ratio)</span>
                       </div>
                     </div>
                   </div>
@@ -2234,19 +2246,19 @@ export default function AstraTradingDesk() {
                     <div style={{ padding: '0.6rem', background: 'rgba(255, 255, 255, 0.03)', borderRadius: '6px', textAlign: 'center' }}>
                       <span style={{ fontSize: '0.65rem', color: 'var(--text-dim)', display: 'block' }}>CANDIDATES</span>
                       <span className="mono" style={{ fontSize: '1.1rem', fontWeight: 800, color: '#fff' }}>
-                        {phase2Data?.tracked_candidates_count ?? (phase1Data?.tracked_stocks_count ?? 9)}
+                        {phase2Data?.tracked_candidates_count ?? (phase1Data?.tracked_stocks_count ?? 38)}
                       </span>
                     </div>
                     <div style={{ padding: '0.6rem', background: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.3)', borderRadius: '6px', textAlign: 'center' }}>
                       <span style={{ fontSize: '0.65rem', color: 'var(--accent-green)', display: 'block', fontWeight: 700 }}>BREAKOUTS</span>
                       <span className="mono" style={{ fontSize: '1.1rem', fontWeight: 800, color: 'var(--accent-green)' }}>
-                        {phase2Data?.confirmed_breakouts_count ?? 6}
+                        {phase2Data?.confirmed_breakouts_count ?? 12}
                       </span>
                     </div>
                     <div style={{ padding: '0.6rem', background: 'rgba(0, 242, 254, 0.08)', border: '1px solid rgba(0, 242, 254, 0.2)', borderRadius: '6px', textAlign: 'center' }}>
                       <span style={{ fontSize: '0.65rem', color: 'var(--accent-cyan)', display: 'block', fontWeight: 700 }}>LATENCY</span>
                       <span className="mono" style={{ fontSize: '1.1rem', fontWeight: 800, color: 'var(--accent-cyan)' }}>
-                        {phase2Data?.execution_latency_ms ?? 2.8} ms
+                        {phase2Data?.execution_latency_ms ?? 14.5} ms
                       </span>
                     </div>
                   </div>

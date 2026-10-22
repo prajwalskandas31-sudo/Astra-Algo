@@ -1,28 +1,25 @@
 # 🚀 Astra Algo - Automated Intraday Trading System
 
-Astra Algo is an institutional-grade automated trading signal engine and execution framework built for Indian equity markets (NSE). It implements the **Opening High Breakout/Reversal** strategy on the 09:15 1-minute candle, featuring real-time broker feeds, sub-millisecond strategy evaluation, and automated dual-channel broadcasts to Telegram and WhatsApp.
+Astra Algo is an institutional-grade automated trading signal engine and execution framework built for Indian equity markets (NSE). It implements the **1-Minute Open Range Breakout (ORB) Strategy** on the 09:15 1-minute candle, featuring real-time broker feeds, sub-millisecond strategy evaluation, and automated dual-channel broadcasts to Telegram and WhatsApp.
 
 ---
 
-## ⚡ Core Strategy Specification: Two-Stage Execution Engine
+## ⚡ Core Strategy Specification: 1-Minute Open Range Breakout (ORB) Strategy
 
-Based on the **Opening High Breakout/Reversal** specification with sub-50ms institutional execution:
-1. **Universe**: Actively traded Futures & Options (F&O) equity instruments (Top 15 liquid leaders: RELIANCE, HDFCBANK, ICICIBANK, INFY, TCS, SBIN, LT, ITC, MARUTI, etc.).
-2. **Key Levels**: Previous Day High (PDH) dynamically pre-cached in-memory for `0.001 ms` zero-latency lookup.
-3. **Phase 1: Market Open PDH Filter (09:15:00 AM IST)**:
-   - Evaluated at market open: `09:15:00 AM IST`.
-   - **Condition**: `"opening of the stock must be below previous day high"` (`open < prev_day_high`).
-   - Stocks opening above or at PDH (gap-up exhaustion) are immediately disqualified.
-   - **Strict Tracking Gate**: Only stocks that pass Condition 1 are tracked for Phase 2.
-4. **Phase 2: 09:15 Candle Close Breakout & Order Execution (09:16:00 AM IST)**:
-   - Evaluated strictly at close of the 09:15 candle: `09:16:00 AM IST`.
-   - Evaluates **ONLY** the stocks tracked from Phase 1.
-   - **Condition**: `"close of 9:15 candle above previous day high"` (`close > prev_day_high`).
-5. **Precise Order Execution Rules**:
-   - **Buy Order Entry**: Executed at the **"High"** of the 09:15 candle.
-   - **Stop Loss (SL)**: Clamped at the **"Low"** of the 09:15 candle.
-   - **Risk per Share**: `High - Low` of the 09:15 candle.
-   - **Profit Target (TP)**: `Entry + 2 x (High - Low)` with strict **1:2 Risk-Reward Ratio**.
+Based on the **1-Minute Open Range Breakout (ORB) Strategy** with sub-50ms institutional execution:
+1. **Setup & Universe**:
+   - **Asset Class**: **Nifty 50 stocks exclusively** (all 50 constituent leaders: RELIANCE, TCS, HDFCBANK, ICICIBANK, BHARTIARTL, INFY, ITC, SBIN, LT, etc.).
+   - **Timeframe**: **1-minute chart**.
+   - **Qualifying Condition**: At market open (9:15 AM), the 9:15 AM candle must open below the Previous Day High (PDH) and close above the PDH (`open < PDH` and `close > PDH`).
+2. **Execution Rules**:
+   - **Entry**: Place a buy order at the high of the 9:15 AM candle (triggers on a break above the high).
+   - **Stop Loss (SL)**: Set the stop loss at the low of the 9:15 AM candle.
+3. **Target Calculation**:
+   - **Risk Range (R)**: $\text{Candle High} - \text{Candle Low}$ (the exact height of the 9:15 AM candle).
+   - **Profit Target**: Set target at $2 \times R$ above the entry level (a strict **1:2 Risk-to-Reward ratio**).
+4. **Two-Stage Execution Engine**:
+   - **Phase 1: Market Open PDH Filter (09:15:00 AM IST)**: Evaluates `open < prev_day_high`. Stocks opening above or at PDH (gap-up exhaustion) are immediately disqualified. Only qualifying stocks advance to Phase 2.
+   - **Phase 2: 09:15 Candle Close Breakout (09:16:00 AM IST)**: Evaluates tracked candidates for `close > prev_day_high`. Triggers buy orders at Candle High, sets SL at Candle Low, and sets Target at $\text{Entry} + 2 \times R$.
    - **Execution Routing**: Instant order placement via Upstox V2 API gateway and recorded in `order_audit_logs`.
 
 ---
@@ -31,9 +28,9 @@ Based on the **Opening High Breakout/Reversal** specification with sub-50ms inst
 
 | Time (IST) | Action | Channel Broadcast |
 | :--- | :--- | :--- |
-| **09:00:00 AM** | **Morning RAM Warmup**: Pre-cache Previous Day Highs for all 15 F&O stocks concurrently. | Telegram Group + WhatsApp |
-| **09:15:00 AM** | **Phase 1 Market Open Filter**: Evaluates `open < prev_day_high`. Disqualifies gap-ups and arms tracked candidates. | Telegram Group + WhatsApp |
-| **09:16:00 AM** | **Phase 2 Candle Close Execution**: Evaluates only Phase 1 candidates for `close > prev_day_high`. Executes Buy orders at 9:15 High, SL at 9:15 Low, Target at 2x Risk. | Telegram Group + WhatsApp + Broker Orders |
+| **09:00:00 AM** | **Morning RAM Warmup**: Pre-cache Previous Day Highs for all 50 Nifty constituent stocks concurrently. | Telegram Group + WhatsApp |
+| **09:15:00 AM** | **Phase 1 Market Open Filter**: Evaluates `open < prev_day_high`. Disqualifies gap-ups and arms tracked Nifty 50 candidates. | Telegram Group + WhatsApp |
+| **09:16:00 AM** | **Phase 2 Candle Close Execution**: Evaluates tracked Nifty 50 candidates for `close > prev_day_high`. Executes Buy orders at 9:15 High, SL at 9:15 Low, Target at 2x Risk ($R$). | Telegram Group + WhatsApp + Broker Orders |
 | **09:17 – 15:15** | **Intraday Target/SL Tracker**: High-frequency monitoring of active positions for 1:2 Target hit or Stop Loss exit. | Telegram Group + WhatsApp |
 | **15:30:00 PM** | **Session Close Report**: Summary of daily setups triggered and performance metrics. | Telegram Group + WhatsApp |
 

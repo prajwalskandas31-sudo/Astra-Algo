@@ -345,24 +345,61 @@ def send_telegram_alert(message: str, triggered_by: str = "system") -> dict:
         "results": results if len(results) > 1 else (results[0] if results else {})
     }
 
-# Monitored Universe: Top actively traded F&O Equity instruments
-FO_UNIVERSE = [
-    {"symbol": "RELIANCE", "instrument_key": "NSE_EQ|INE002A01018"},
-    {"symbol": "HDFCBANK", "instrument_key": "NSE_EQ|INE040A01034"},
-    {"symbol": "ICICIBANK", "instrument_key": "NSE_EQ|INE090A01021"},
-    {"symbol": "INFY", "instrument_key": "NSE_EQ|INE009A01021"},
-    {"symbol": "TCS", "instrument_key": "NSE_EQ|INE467B01029"},
-    {"symbol": "SBIN", "instrument_key": "NSE_EQ|INE062A01020"},
-    {"symbol": "BHARTIARTL", "instrument_key": "NSE_EQ|INE397D01024"},
-    {"symbol": "TATAMOTORS", "instrument_key": "NSE_EQ|INE155A01022"},
-    {"symbol": "LT", "instrument_key": "NSE_EQ|INE018A01030"},
-    {"symbol": "AXISBANK", "instrument_key": "NSE_EQ|INE238A01034"},
-    {"symbol": "ITC", "instrument_key": "NSE_EQ|INE154A01025"},
-    {"symbol": "KOTAKBANK", "instrument_key": "NSE_EQ|INE237A01028"},
-    {"symbol": "TATASTEEL", "instrument_key": "NSE_EQ|INE081A01020"},
-    {"symbol": "MARUTI", "instrument_key": "NSE_EQ|INE585B01010"},
-    {"symbol": "BAJFINANCE", "instrument_key": "NSE_EQ|INE296A01024"},
+# Monitored Universe: Nifty 50 stocks exclusively
+NIFTY_50_UNIVERSE = [
+    {"symbol": "RELIANCE", "instrument_key": "NSE_EQ|INE002A01018", "sector": "Energy / Conglomerate"},
+    {"symbol": "TCS", "instrument_key": "NSE_EQ|INE467B01029", "sector": "IT Services"},
+    {"symbol": "HDFCBANK", "instrument_key": "NSE_EQ|INE040A01034", "sector": "Banking & Finance"},
+    {"symbol": "ICICIBANK", "instrument_key": "NSE_EQ|INE090A01021", "sector": "Banking & Finance"},
+    {"symbol": "BHARTIARTL", "instrument_key": "NSE_EQ|INE397D01024", "sector": "Telecommunications"},
+    {"symbol": "SBIN", "instrument_key": "NSE_EQ|INE062A01020", "sector": "Banking & Finance"},
+    {"symbol": "INFY", "instrument_key": "NSE_EQ|INE009A01021", "sector": "IT Services"},
+    {"symbol": "ITC", "instrument_key": "NSE_EQ|INE154A01025", "sector": "Consumer Goods (FMCG)"},
+    {"symbol": "HINDUNILVR", "instrument_key": "NSE_EQ|INE030A01027", "sector": "Consumer Goods (FMCG)"},
+    {"symbol": "LT", "instrument_key": "NSE_EQ|INE018A01030", "sector": "Infrastructure / Capital Goods"},
+    {"symbol": "BAJFINANCE", "instrument_key": "NSE_EQ|INE296A01024", "sector": "Banking & Finance"},
+    {"symbol": "HCLTECH", "instrument_key": "NSE_EQ|INE860A01027", "sector": "IT Services"},
+    {"symbol": "MARUTI", "instrument_key": "NSE_EQ|INE585B01010", "sector": "Automobile"},
+    {"symbol": "SUNPHARMA", "instrument_key": "NSE_EQ|INE044A01036", "sector": "Healthcare / Pharma"},
+    {"symbol": "ADANIENT", "instrument_key": "NSE_EQ|INE423A01024", "sector": "Metals / Conglomerate"},
+    {"symbol": "KOTAKBANK", "instrument_key": "NSE_EQ|INE237A01028", "sector": "Banking & Finance"},
+    {"symbol": "TATAMOTORS", "instrument_key": "NSE_EQ|INE155A01022", "sector": "Automobile"},
+    {"symbol": "AXISBANK", "instrument_key": "NSE_EQ|INE238A01034", "sector": "Banking & Finance"},
+    {"symbol": "NTPC", "instrument_key": "NSE_EQ|INE733E01010", "sector": "Power Generation"},
+    {"symbol": "ONGC", "instrument_key": "NSE_EQ|INE213A01029", "sector": "Oil & Gas"},
+    {"symbol": "TITAN", "instrument_key": "NSE_EQ|INE280A01028", "sector": "Consumer Goods / Jewelry"},
+    {"symbol": "POWERGRID", "instrument_key": "NSE_EQ|INE752E01010", "sector": "Power Transmission"},
+    {"symbol": "ADANIPORTS", "instrument_key": "NSE_EQ|INE742F01042", "sector": "Services / Ports"},
+    {"symbol": "TATASTEEL", "instrument_key": "NSE_EQ|INE081A01020", "sector": "Metals & Mining"},
+    {"symbol": "COALINDIA", "instrument_key": "NSE_EQ|INE522F01014", "sector": "Metals & Mining"},
+    {"symbol": "BAJAJFINSV", "instrument_key": "NSE_EQ|INE918I01026", "sector": "Banking & Finance"},
+    {"symbol": "ASIANPAINT", "instrument_key": "NSE_EQ|INE021A01026", "sector": "Consumer Goods"},
+    {"symbol": "M&M", "instrument_key": "NSE_EQ|INE101A01026", "sector": "Automobile"},
+    {"symbol": "JSWSTEEL", "instrument_key": "NSE_EQ|INE019A01038", "sector": "Metals & Mining"},
+    {"symbol": "TRENT", "instrument_key": "NSE_EQ|INE849A01020", "sector": "Consumer Services / Retail"},
+    {"symbol": "BEL", "instrument_key": "NSE_EQ|INE263A01024", "sector": "Defense / Electronics"},
+    {"symbol": "SHRIRAMFIN", "instrument_key": "NSE_EQ|INE721A01013", "sector": "Banking & Finance"},
+    {"symbol": "BPCL", "instrument_key": "NSE_EQ|INE029A01011", "sector": "Oil & Gas"},
+    {"symbol": "GRASIM", "instrument_key": "NSE_EQ|INE047A01021", "sector": "Cement / Materials"},
+    {"symbol": "EICHERMOT", "instrument_key": "NSE_EQ|INE066A01021", "sector": "Automobile"},
+    {"symbol": "NESTLEIND", "instrument_key": "NSE_EQ|INE239A01024", "sector": "Consumer Goods (FMCG)"},
+    {"symbol": "TECHM", "instrument_key": "NSE_EQ|INE669C01036", "sector": "IT Services"},
+    {"symbol": "HINDALCO", "instrument_key": "NSE_EQ|INE038A01020", "sector": "Metals & Mining"},
+    {"symbol": "CIPLA", "instrument_key": "NSE_EQ|INE059A01026", "sector": "Healthcare / Pharma"},
+    {"symbol": "WIPRO", "instrument_key": "NSE_EQ|INE075A01022", "sector": "IT Services"},
+    {"symbol": "ULTRACEMCO", "instrument_key": "NSE_EQ|INE481G01011", "sector": "Cement & Construction"},
+    {"symbol": "TATACONSUM", "instrument_key": "NSE_EQ|INE192A01025", "sector": "Consumer Goods (FMCG)"},
+    {"symbol": "DRREDDY", "instrument_key": "NSE_EQ|INE089A01023", "sector": "Healthcare / Pharma"},
+    {"symbol": "BRITANNIA", "instrument_key": "NSE_EQ|INE216A01030", "sector": "Consumer Goods (FMCG)"},
+    {"symbol": "SBILIFE", "instrument_key": "NSE_EQ|INE123W01016", "sector": "Insurance"},
+    {"symbol": "HDFCLIFE", "instrument_key": "NSE_EQ|INE795G01014", "sector": "Insurance"},
+    {"symbol": "APOLLOHOSP", "instrument_key": "NSE_EQ|INE437A01024", "sector": "Healthcare Services"},
+    {"symbol": "BAJAJ-AUTO", "instrument_key": "NSE_EQ|INE917I01010", "sector": "Automobile"},
+    {"symbol": "INDUSINDBK", "instrument_key": "NSE_EQ|INE095A01012", "sector": "Banking & Finance"},
+    {"symbol": "HEROMOTOCO", "instrument_key": "NSE_EQ|INE158A01026", "sector": "Automobile"}
 ]
+# Alias FO_UNIVERSE to NIFTY_50_UNIVERSE for backward compatibility
+FO_UNIVERSE = NIFTY_50_UNIVERSE
 
 # In-memory caches, tracking lists & active positions
 CACHED_PREV_HIGHS = dict(upstox_client.DEFAULT_PREV_HIGHS)
@@ -376,23 +413,63 @@ PHASE1_DISQUALIFIED_STOCKS = []  # Stocks disqualified: open >= prev_day_high
 LAST_PHASE1_RESULT = None        # Telemetry & results of 09:15 AM market open filter
 LAST_PHASE2_RESULT = None        # Telemetry & results of 09:16 AM candle close breakout
 
-# High-fidelity realistic simulated data when outside market hours or token expired
+# Realistic simulated 09:15 1-minute candle data for all 50 Nifty constituent stocks
 SIMULATED_CANDLES = {
+    # Qualified (Open < PDH) and Confirmed Breakout (Close > PDH)
     "RELIANCE": {"open": 2492.50, "high": 2515.00, "low": 2488.00, "close": 2508.00, "prev_day_high": 2500.00},
     "INFY": {"open": 1882.00, "high": 1908.00, "low": 1878.00, "close": 1902.00, "prev_day_high": 1895.00},
-    "TCS": {"open": 3940.00, "high": 3948.00, "low": 3935.00, "close": 3945.00, "prev_day_high": 3950.00},
+    "TCS": {"open": 3940.00, "high": 3968.00, "low": 3935.00, "close": 3958.00, "prev_day_high": 3950.00},
+    "LT": {"open": 3610.00, "high": 3638.00, "low": 3602.00, "close": 3626.00, "prev_day_high": 3620.00},
+    "ITC": {"open": 488.50, "high": 494.00, "low": 487.00, "close": 492.20, "prev_day_high": 490.00},
+    "TATASTEEL": {"open": 153.50, "high": 157.20, "low": 152.90, "close": 156.40, "prev_day_high": 155.00},
+    "MARUTI": {"open": 12380.00, "high": 12480.00, "low": 12350.00, "close": 12435.00, "prev_day_high": 12400.00},
+    "BEL": {"open": 292.00, "high": 298.50, "low": 290.50, "close": 296.80, "prev_day_high": 295.00},
+    "TRENT": {"open": 7610.00, "high": 7720.00, "low": 7590.00, "close": 7685.00, "prev_day_high": 7650.00},
+    "HCLTECH": {"open": 1828.00, "high": 1855.00, "low": 1822.00, "close": 1846.00, "prev_day_high": 1840.00},
+    "SUNPHARMA": {"open": 1865.00, "high": 1895.00, "low": 1860.00, "close": 1888.00, "prev_day_high": 1880.00},
+    "TITAN": {"open": 3430.00, "high": 3475.00, "low": 3420.00, "close": 3460.00, "prev_day_high": 3450.00},
+    
+    # Qualified in Phase 1 (Open < PDH) but did NOT close above PDH (Close <= PDH)
     "TATAMOTORS": {"open": 932.00, "high": 938.50, "low": 929.00, "close": 936.00, "prev_day_high": 940.00},
+    "BHARTIARTL": {"open": 1672.00, "high": 1678.00, "low": 1668.00, "close": 1675.00, "prev_day_high": 1680.00},
+    "NTPC": {"open": 411.00, "high": 414.50, "low": 409.00, "close": 413.20, "prev_day_high": 415.00},
+    "ONGC": {"open": 286.00, "high": 289.50, "low": 285.00, "close": 288.40, "prev_day_high": 290.00},
+    "POWERGRID": {"open": 331.00, "high": 334.00, "low": 330.00, "close": 333.50, "prev_day_high": 335.00},
+    "COALINDIA": {"open": 490.00, "high": 494.00, "low": 488.00, "close": 492.50, "prev_day_high": 495.00},
+    "M&M": {"open": 3020.00, "high": 3045.00, "low": 3010.00, "close": 3038.00, "prev_day_high": 3050.00},
+    "JSWSTEEL": {"open": 982.00, "high": 988.00, "low": 978.00, "close": 985.00, "prev_day_high": 990.00},
+    "BPCL": {"open": 341.00, "high": 344.00, "low": 339.50, "close": 343.00, "prev_day_high": 345.00},
+    "GRASIM": {"open": 2650.00, "high": 2675.00, "low": 2640.00, "close": 2668.00, "prev_day_high": 2680.00},
+    "EICHERMOT": {"open": 4810.00, "high": 4845.00, "low": 4795.00, "close": 4835.00, "prev_day_high": 4850.00},
+    "NESTLEIND": {"open": 2330.00, "high": 2348.00, "low": 2320.00, "close": 2342.00, "prev_day_high": 2350.00},
+    "TECHM": {"open": 1665.00, "high": 1678.00, "low": 1658.00, "close": 1672.00, "prev_day_high": 1680.00},
+    "HINDALCO": {"open": 702.00, "high": 708.50, "low": 699.00, "close": 706.00, "prev_day_high": 710.00},
+    "CIPLA": {"open": 1525.00, "high": 1538.00, "low": 1520.00, "close": 1534.00, "prev_day_high": 1540.00},
+    "WIPRO": {"open": 534.00, "high": 539.00, "low": 532.00, "close": 537.50, "prev_day_high": 540.00},
+    "ULTRACEMCO": {"open": 11120.00, "high": 11190.00, "low": 11080.00, "close": 11160.00, "prev_day_high": 11200.00},
+    "TATACONSUM": {"open": 1108.00, "high": 1118.00, "low": 1102.00, "close": 1114.00, "prev_day_high": 1120.00},
+    "DRREDDY": {"open": 6530.00, "high": 6575.00, "low": 6510.00, "close": 6560.00, "prev_day_high": 6580.00},
+    "BRITANNIA": {"open": 5810.00, "high": 5845.00, "low": 5790.00, "close": 5835.00, "prev_day_high": 5850.00},
+    "SBILIFE": {"open": 1695.00, "high": 1708.00, "low": 1688.00, "close": 1702.00, "prev_day_high": 1710.00},
+    "HDFCLIFE": {"open": 718.00, "high": 724.00, "low": 715.00, "close": 721.50, "prev_day_high": 725.00},
+    "APOLLOHOSP": {"open": 7090.00, "high": 7140.00, "low": 7060.00, "close": 7120.00, "prev_day_high": 7150.00},
+    "BAJAJ-AUTO": {"open": 10380.00, "high": 10440.00, "low": 10320.00, "close": 10410.00, "prev_day_high": 10450.00},
+    "INDUSINDBK": {"open": 1308.00, "high": 1318.00, "low": 1302.00, "close": 1312.00, "prev_day_high": 1320.00},
+    "HEROMOTOCO": {"open": 5210.00, "high": 5245.00, "low": 5185.00, "close": 5230.00, "prev_day_high": 5250.00},
+    
+    # Disqualified in Phase 1 (Gapped Open >= Previous Day High)
     "HDFCBANK": {"open": 1658.00, "high": 1664.00, "low": 1652.00, "close": 1660.00, "prev_day_high": 1650.00},
     "ICICIBANK": {"open": 1245.00, "high": 1252.00, "low": 1241.00, "close": 1248.00, "prev_day_high": 1240.00},
     "SBIN": {"open": 798.50, "high": 803.00, "low": 796.00, "close": 801.00, "prev_day_high": 795.00},
-    "BHARTIARTL": {"open": 1672.00, "high": 1678.00, "low": 1668.00, "close": 1675.00, "prev_day_high": 1680.00},
-    "LT": {"open": 3610.00, "high": 3628.00, "low": 3602.00, "close": 3624.00, "prev_day_high": 3620.00},
     "AXISBANK": {"open": 1184.00, "high": 1188.00, "low": 1179.00, "close": 1182.00, "prev_day_high": 1180.00},
-    "ITC": {"open": 488.50, "high": 492.00, "low": 487.00, "close": 491.50, "prev_day_high": 490.00},
     "KOTAKBANK": {"open": 1785.00, "high": 1792.00, "low": 1780.00, "close": 1788.00, "prev_day_high": 1780.00},
-    "TATASTEEL": {"open": 153.50, "high": 156.80, "low": 152.90, "close": 156.20, "prev_day_high": 155.00},
-    "MARUTI": {"open": 12380.00, "high": 12440.00, "low": 12350.00, "close": 12425.00, "prev_day_high": 12400.00},
     "BAJFINANCE": {"open": 7165.00, "high": 7180.00, "low": 7140.00, "close": 7155.00, "prev_day_high": 7150.00},
+    "HINDUNILVR": {"open": 2470.00, "high": 2482.00, "low": 2465.00, "close": 2476.00, "prev_day_high": 2460.00},
+    "ADANIENT": {"open": 3135.00, "high": 3160.00, "low": 3125.00, "close": 3145.00, "prev_day_high": 3120.00},
+    "ADANIPORTS": {"open": 1428.00, "high": 1440.00, "low": 1422.00, "close": 1432.00, "prev_day_high": 1420.00},
+    "BAJAJFINSV": {"open": 1860.00, "high": 1872.00, "low": 1852.00, "close": 1864.00, "prev_day_high": 1850.00},
+    "ASIANPAINT": {"open": 2995.00, "high": 3015.00, "low": 2988.00, "close": 3004.00, "prev_day_high": 2980.00},
+    "SHRIRAMFIN": {"open": 3335.00, "high": 3355.00, "low": 3322.00, "close": 3342.00, "prev_day_high": 3320.00},
 }
 
 def fetch_and_cache_daily_highs(force_refresh: bool = False) -> dict:
@@ -539,25 +616,30 @@ def evaluate_strategy(
     instrument_key: str = None
 ):
     """
-    Evaluates the 'Opening High Breakout/Reversal' strategy on the 09:15 1-minute candle.
+    Evaluates the '1-Minute Open Range Breakout (ORB) Strategy' on the 09:15 1-minute candle across Nifty 50 stocks exclusively.
     Requirements:
-    - Condition 1: 09:15 Open is below Previous Day High (open_price < prev_day_high)
-    - Condition 2: 09:15 Close is above Previous Day High (close_price > prev_day_high)
-    Execution Rules:
-    - Entry: execute buy order at "high" of 9:15 candle (entry_price = high_price)
-    - Stop loss at "low" of 9:15 candle (stop_loss = low_price)
-    - Target is 2 x (high - low of 9:15 candle) (target = entry_price + 2 * (high - low))
+    1. Setup & Universe:
+       - Asset Class: Nifty 50 stocks exclusively.
+       - Timeframe: 1-minute chart.
+       - Qualifying Condition: At market open (9:15 AM), the 9:15 AM candle must open below the Previous Day High (PDH) and close above the PDH.
+    2. Execution Rules:
+       - Entry: Place a buy order at the high of the 9:15 AM candle (triggers on a break above the high).
+       - Stop Loss (SL): Set the stop loss at the low of the 9:15 AM candle.
+    3. Target Calculation:
+       - Risk Range (R): "Candle High" - "Candle Low" (the height of the 9:15 AM candle).
+       - Profit Target: Set target at 2×R above the entry level (a 1:2 Risk-to-Reward ratio).
     """
     ist = pytz.timezone("Asia/Kolkata")
     now_ist = datetime.now(ist).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3] + " IST"
     
+    # Qualifying Condition: Open below PDH and Close above PDH
     is_breakout = (open_price < prev_day_high) and (close_price > prev_day_high)
     
     # Precise trade execution parameters per user specification:
-    expected_entry = round(high_price, 2)                       # Entry: Buy order at High of 9:15 candle
-    stop_loss = round(low_price, 2)                             # Stop loss at Low of 9:15 candle
-    risk_value = round(high_price - low_price, 2)               # Risk per share = High - Low
-    target_price = round(expected_entry + (2 * risk_value), 2)  # Target is 2 x (High - Low)
+    expected_entry = round(high_price, 2)                       # Entry: Place buy order at High of 9:15 candle (triggers on break above high)
+    stop_loss = round(low_price, 2)                             # Stop loss (SL) at Low of 9:15 candle
+    risk_value = round(high_price - low_price, 2)               # Risk Range (R) = Candle High - Candle Low
+    target_price = round(expected_entry + (2 * risk_value), 2)  # Profit Target: 2xR above entry (1:2 R:R)
     
     order_execution_result = None
     
@@ -599,13 +681,12 @@ def evaluate_strategy(
             "execution_latency_ms": latency_ms or 1.2,
             "broker_status": order_execution_result.get("broker_status", "PLACED"),
             "mode": order_execution_result.get("mode", "SIMULATION"),
-            "details": f"Buy order at 9:15 High Rs.{expected_entry}, SL at Low Rs.{stop_loss}, Target Rs.{target_price}"
+            "details": f"Buy order at 9:15 High Rs.{expected_entry}, SL at Low Rs.{stop_loss}, Target (2xR) Rs.{target_price}"
         }
 
         ORDER_HISTORY.insert(0, order_log_entry)
         _ALERT_WORKER_POOL.submit(record_order_log, order_log_entry)
 
-        
         # Track for live intraday Target & SL monitoring
         trade_record = {
             "symbol": symbol,
@@ -638,6 +719,7 @@ def evaluate_strategy(
         "entry_order_level": expected_entry if is_breakout else None,
         "stop_loss": stop_loss if is_breakout else None,
         "stop_loss_level": stop_loss if is_breakout else None,
+        "risk_range_R": risk_value if is_breakout else None,
         "risk_per_share": risk_value if is_breakout else None,
         "take_profit": target_price if is_breakout else None,
         "take_profit_level": target_price if is_breakout else None,
@@ -645,22 +727,24 @@ def evaluate_strategy(
         "order_execution": order_execution_result
     }
 
-    
     if is_breakout:
         latency_badge = f"\n**Engine Latency**: `{latency_ms:.1f}ms`" if latency_ms is not None else ""
         target_gain = round(risk_value * 2, 2)
         mode_badge = f" ({order_execution_result.get('mode', 'SIM')})" if order_execution_result else ""
         alert_msg = (
-            f"🚀 *09:15 CANDLE BREAKOUT: BUY ORDER EXECUTED* 🚀\n\n"
+            f"🚀 *1-MINUTE ORB STRATEGY: BUY ORDER PLACED (NIFTY 50)* 🚀\n\n"
+            f"**Setup**: 1-Minute Open Range Breakout (ORB)\n"
+            f"**Universe**: Nifty 50 Stocks Exclusively\n"
             f"**Symbol**: {symbol}\n"
             f"**Trigger Time**: `{now_ist}`{latency_badge}\n"
-            f"**Status**: Confirmed Setup (Long Breakout)\n"
-            f"**Prev Day High**: ₹{prev_day_high}\n"
-            f"**09:15 Candle**: O:{open_price} | H:{high_price} | L:{low_price} | C:{close_price}\n\n"
-            f"🟢 **BUY ORDER EXECUTED AT 9:15 HIGH**: ₹{expected_entry}\n"
+            f"**Status**: Confirmed Setup (Breakout)\n"
+            f"**Prev Day High (PDH)**: ₹{prev_day_high}\n"
+            f"**09:15 Candle (1-Min)**: O:{open_price} | H:{high_price} | L:{low_price} | C:{close_price}\n\n"
+            f"🟢 **BUY ORDER AT 9:15 HIGH**: ₹{expected_entry} (triggers on break above high)\n"
             f"🛑 **STOP LOSS AT 9:15 LOW**: ₹{stop_loss}\n"
-            f"🎯 **TARGET (2x Risk)**: ₹{target_price} (+₹{target_gain})\n"
-            f"⚖️ **Risk / Reward**: 1:2 (Risk/Share: ₹{risk_value})\n"
+            f"📏 **Risk Range (R = High - Low)**: ₹{risk_value}\n"
+            f"🎯 **PROFIT TARGET (2x R)**: ₹{target_price} (+₹{target_gain})\n"
+            f"⚖️ **Risk-to-Reward Ratio**: 1:2 (1:2 R:R)\n"
             f"📦 **Order ID**: `{order_execution_result.get('order_id') if order_execution_result else 'ASTRA-ORB'}`{mode_badge}"
         )
         
@@ -864,7 +948,7 @@ def run_multi_strategy_check(strategy_keys: list = None, db_strategies: list = N
         if key in ["open_range_breakout", "opening_high_breakout"]:
             return key, {
                 "strategy_key": key,
-                "strategy_name": "Open Range Breakout (ORB)",
+                "strategy_name": "1-Minute Open Range Breakout (ORB) Strategy",
                 "timeframe": meta.get("timeframe", "1-Min (09:15-09:16)"),
                 "status": "EXECUTED_LIVE",
                 "execution_latency_ms": round((time.perf_counter() - t_strat) * 1000, 2),
