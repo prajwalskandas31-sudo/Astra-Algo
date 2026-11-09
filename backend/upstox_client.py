@@ -1,6 +1,21 @@
+"""
+Upstox V2 broker gateway: auth status, order placement / status / cancel, tick sizes.
+
+Market data (candles, quotes) lives in market_data.py.
+This module never fabricates fills: paper trading is handled by strategy.py.
+"""
+import gzip
+import json
+import math
 import os
+import threading
+import time
+import urllib.parse
+
 import requests
 from dotenv import load_dotenv
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
@@ -10,111 +25,56 @@ UPSTOX_API_SECRET = os.getenv("UPSTOX_API_SECRET")
 UPSTOX_ACCESS_TOKEN = os.getenv("UPSTOX_ACCESS_TOKEN") or os.getenv("ACCESS_TOKEN")
 
 BASE_URL = "https://api.upstox.com/v2"
+INSTRUMENTS_URL = "https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz"
 
-# Persistent HTTP Session with Keep-Alive connection pooling for sub-30ms requests
+# Persistent HTTP session with keep-alive pooling.
+# Only idempotent GETs are retried; order POST/DELETE must never be blindly retried (risk of duplicate orders).
 session = requests.Session()
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
-
 _adapter = HTTPAdapter(
     pool_connections=30,
     pool_maxsize=30,
-    max_retries=Retry(total=2, backoff_factor=0.1, status_forcelist=[502, 503, 504])
+    max_retries=Retry(total=2, backoff_factor=0.1, status_forcelist=[502, 503, 504], allowed_methods=frozenset({"GET"})),
 )
 session.mount("https://", _adapter)
-session.mount("http://", _adapter)
-
-# Pre-cached fallback Previous Day Highs for Nifty 50 stocks (ultra-fast sub-millisecond execution)
-DEFAULT_PREV_HIGHS = {
-    "NSE_EQ|INE002A01018": 2500.00,  # RELIANCE
-    "NSE_EQ|INE467B01029": 3950.00,  # TCS
-    "NSE_EQ|INE040A01034": 1650.00,  # HDFCBANK
-    "NSE_EQ|INE090A01021": 1240.00,  # ICICIBANK
-    "NSE_EQ|INE397D01024": 1680.00,  # BHARTIARTL
-    "NSE_EQ|INE062A01020": 795.00,   # SBIN
-    "NSE_EQ|INE009A01021": 1895.00,  # INFY
-    "NSE_EQ|INE154A01025": 490.00,   # ITC
-    "NSE_EQ|INE030A01027": 2460.00,  # HINDUNILVR
-    "NSE_EQ|INE018A01030": 3620.00,  # LT
-    "NSE_EQ|INE296A01024": 7150.00,  # BAJFINANCE
-    "NSE_EQ|INE860A01027": 1840.00,  # HCLTECH
-    "NSE_EQ|INE585B01010": 12400.00, # MARUTI
-    "NSE_EQ|INE044A01036": 1880.00,  # SUNPHARMA
-    "NSE_EQ|INE423A01024": 3120.00,  # ADANIENT
-    "NSE_EQ|INE237A01028": 1780.00,  # KOTAKBANK
-    "NSE_EQ|INE155A01022": 940.00,   # TATAMOTORS
-    "NSE_EQ|INE238A01034": 1180.00,  # AXISBANK
-    "NSE_EQ|INE733E01010": 415.00,   # NTPC
-    "NSE_EQ|INE213A01029": 290.00,   # ONGC
-    "NSE_EQ|INE280A01028": 3450.00,  # TITAN
-    "NSE_EQ|INE752E01010": 335.00,   # POWERGRID
-    "NSE_EQ|INE742F01042": 1420.00,  # ADANIPORTS
-    "NSE_EQ|INE081A01020": 155.00,   # TATASTEEL
-    "NSE_EQ|INE522F01014": 495.00,   # COALINDIA
-    "NSE_EQ|INE918I01026": 1850.00,  # BAJAJFINSV
-    "NSE_EQ|INE021A01026": 2980.00,  # ASIANPAINT
-    "NSE_EQ|INE101A01026": 3050.00,  # M&M
-    "NSE_EQ|INE019A01038": 990.00,   # JSWSTEEL
-    "NSE_EQ|INE849A01020": 7650.00,  # TRENT
-    "NSE_EQ|INE263A01024": 295.00,   # BEL
-    "NSE_EQ|INE721A01013": 3320.00,  # SHRIRAMFIN
-    "NSE_EQ|INE029A01011": 345.00,   # BPCL
-    "NSE_EQ|INE047A01021": 2680.00,  # GRASIM
-    "NSE_EQ|INE066A01021": 4850.00,  # EICHERMOT
-    "NSE_EQ|INE239A01024": 2350.00,  # NESTLEIND
-    "NSE_EQ|INE669C01036": 1680.00,  # TECHM
-    "NSE_EQ|INE038A01020": 710.00,   # HINDALCO
-    "NSE_EQ|INE059A01026": 1540.00,  # CIPLA
-    "NSE_EQ|INE075A01022": 540.00,   # WIPRO
-    "NSE_EQ|INE481G01011": 11200.00, # ULTRACEMCO
-    "NSE_EQ|INE192A01025": 1120.00,  # TATACONSUM
-    "NSE_EQ|INE089A01023": 6580.00,  # DRREDDY
-    "NSE_EQ|INE216A01030": 5850.00,  # BRITANNIA
-    "NSE_EQ|INE123W01016": 1710.00,  # SBILIFE
-    "NSE_EQ|INE795G01014": 725.00,   # HDFCLIFE
-    "NSE_EQ|INE437A01024": 7150.00,  # APOLLOHOSP
-    "NSE_EQ|INE917I01010": 10450.00, # BAJAJ-AUTO
-    "NSE_EQ|INE095A01012": 1320.00,  # INDUSINDBK
-    "NSE_EQ|INE158A01026": 5250.00,  # HEROMOTOCO
-}
 
 _TOKEN_STATUS_CACHE = {"status": None, "checked_at": 0, "is_valid": False}
 
+
+def set_access_token(token: str):
+    """Swap the in-memory token (after OAuth callback) and invalidate the status cache."""
+    global UPSTOX_ACCESS_TOKEN
+    UPSTOX_ACCESS_TOKEN = token
+    _TOKEN_STATUS_CACHE.update({"status": None, "checked_at": 0, "is_valid": False})
+
+
 def get_headers():
-    token = UPSTOX_ACCESS_TOKEN
     return {
         "accept": "application/json",
         "Api-Version": "2.0",
-        "Authorization": f"Bearer {token}"
+        "Authorization": f"Bearer {UPSTOX_ACCESS_TOKEN}",
     }
 
+
+def _token_configured() -> bool:
+    return bool(UPSTOX_ACCESS_TOKEN) and "your_" not in UPSTOX_ACCESS_TOKEN
+
+
 def is_token_active() -> bool:
-    """
-    Checks if token is non-empty and has not been cached as expired within last 60 seconds.
-    Eliminates redundant network timeout stalls when token is expired.
-    """
-    import time
-    if not UPSTOX_ACCESS_TOKEN or "your_" in UPSTOX_ACCESS_TOKEN:
+    """True when the token is configured and was verified within the last 60 seconds."""
+    if not _token_configured():
         return False
-    now = time.time()
-    if now - _TOKEN_STATUS_CACHE["checked_at"] < 60:
+    if time.time() - _TOKEN_STATUS_CACHE["checked_at"] < 60:
         return _TOKEN_STATUS_CACHE["is_valid"]
-    # First check or cache expired: run single fast test
-    res = test_connection()
+    test_connection()
     return _TOKEN_STATUS_CACHE.get("is_valid", False)
 
 
 def test_connection():
-    """
-    Checks Upstox API connection and token status using warm connection pool.
-    """
-    import time
-    if not UPSTOX_ACCESS_TOKEN or "your_" in UPSTOX_ACCESS_TOKEN:
+    """Checks Upstox API connection and token status."""
+    if not _token_configured():
         return {"status": "UNCONFIGURED", "detail": "Missing or placeholder Upstox access token."}
-    
-    url = f"{BASE_URL}/user/profile"
     try:
-        response = session.get(url, headers=get_headers(), timeout=2)
+        response = session.get(f"{BASE_URL}/user/profile", headers=get_headers(), timeout=3)
         if response.status_code == 200:
             user_data = response.json().get("data", {})
             _TOKEN_STATUS_CACHE.update({"status": "CONNECTED", "checked_at": time.time(), "is_valid": True})
@@ -123,183 +83,153 @@ def test_connection():
                 "user_id": user_data.get("user_id"),
                 "user_name": user_data.get("user_name"),
                 "broker": "Upstox V2 API",
-                "authenticated": True
+                "authenticated": True,
             }
-        elif response.status_code == 401:
+        if response.status_code == 401:
             _TOKEN_STATUS_CACHE.update({"status": "EXPIRED", "checked_at": time.time(), "is_valid": False})
             return {"status": "EXPIRED", "detail": "Upstox token expired or invalid."}
-        else:
-            _TOKEN_STATUS_CACHE.update({"status": "ONLINE", "checked_at": time.time(), "is_valid": True})
-            return {
-                "status": "ONLINE",
-                "broker": "Upstox V2 Gateway",
-                "authenticated": True,
-                "http_status": response.status_code
-            }
+        # Any other status is NOT proof of a valid session; don't trade on it.
+        _TOKEN_STATUS_CACHE.update({"status": "DEGRADED", "checked_at": time.time(), "is_valid": False})
+        return {"status": "DEGRADED", "detail": f"Upstox returned HTTP {response.status_code}", "http_status": response.status_code}
     except Exception as e:
         _TOKEN_STATUS_CACHE.update({"status": "ERROR", "checked_at": time.time(), "is_valid": False})
         return {"status": "ERROR", "detail": str(e)}
 
-def get_historical_data(instrument_key: str, interval: str = "1minute"):
-    """
-    Fetches intraday historical data for the instrument.
-    Upstox interval options: 1minute, 30minute.
-    """
-    if not is_token_active():
-        return []
-    url = f"{BASE_URL}/historical-candle/intraday/{instrument_key}/{interval}"
-    try:
-        response = session.get(url, headers=get_headers(), timeout=1.5)
-        if response.status_code == 200:
-            data = response.json()
-            if data.get("status") == "success":
-                return data.get("data", {}).get("candles", [])
-    except Exception as e:
-        print(f"Error fetching Upstox candle data for {instrument_key}: {e}")
-    return []
 
-def get_latest_candle(instrument_key: str):
-    """
-    Returns the most recent 1-minute candle data: [timestamp, open, high, low, close, volume, open_interest]
-    """
-    candles = get_historical_data(instrument_key, "1minute")
-    if candles and len(candles) > 0:
-        return candles[0]
-    return None
+# ---------------------------------------------------------------------------
+# Tick sizes (NSE rejects prices that are not a multiple of the instrument's tick)
+# ---------------------------------------------------------------------------
+_TICK_CACHE_FILE = os.path.join(os.path.dirname(__file__), "data", "tick_sizes.json")
+_tick_lock = threading.Lock()
+_tick_map = {}
+_tick_loaded_day = None
 
-def get_previous_day_high(instrument_key: str):
-    """
-    Fetches the Previous Day High from Upstox daily historical candles.
-    Candles are formatted as: [timestamp, open, high, low, close, volume, open_interest]
-    Falls back instantly to DEFAULT_PREV_HIGHS if token is inactive or call fails.
-    """
-    if is_token_active():
-        import datetime
-        today = datetime.date.today()
-        past = today - datetime.timedelta(days=10)
-        url = f"{BASE_URL}/historical-candle/{instrument_key}/day/{today}/{past}"
+
+def _fallback_tick(price: float) -> float:
+    # NSE price-band tick schedule (used only if the instrument master is unavailable)
+    if price < 250:
+        return 0.01
+    if price < 1000:
+        return 0.05
+    if price < 5000:
+        return 0.10
+    if price < 10000:
+        return 0.50
+    if price < 20000:
+        return 1.00
+    return 5.00
+
+
+def _load_tick_map():
+    global _tick_map, _tick_loaded_day
+    today = time.strftime("%Y-%m-%d")
+    with _tick_lock:
+        if _tick_loaded_day == today and _tick_map:
+            return
         try:
-            response = session.get(url, headers=get_headers(), timeout=1.5)
-            if response.status_code == 200:
-                candles = response.json().get("data", {}).get("candles", [])
-                if candles and len(candles) > 0 and len(candles[0]) >= 3:
-                    return float(candles[0][2])
+            if os.path.exists(_TICK_CACHE_FILE):
+                cached = json.load(open(_TICK_CACHE_FILE, encoding="utf-8"))
+                if cached.get("day") == today:
+                    _tick_map, _tick_loaded_day = cached["ticks"], today
+                    return
+            resp = requests.get(INSTRUMENTS_URL, timeout=20)
+            resp.raise_for_status()
+            rows = json.loads(gzip.decompress(resp.content))
+            # Upstox publishes tick_size in paise
+            ticks = {r["instrument_key"]: float(r["tick_size"]) / 100.0
+                     for r in rows if r.get("segment") == "NSE_EQ" and r.get("tick_size")}
+            os.makedirs(os.path.dirname(_TICK_CACHE_FILE), exist_ok=True)
+            json.dump({"day": today, "ticks": ticks}, open(_TICK_CACHE_FILE, "w", encoding="utf-8"))
+            _tick_map, _tick_loaded_day = ticks, today
         except Exception as e:
-            print(f"Error fetching previous day high for {instrument_key}: {e}")
-            
-    # Sub-millisecond instant fallback
-    return DEFAULT_PREV_HIGHS.get(instrument_key, 2500.0)
+            print(f"[upstox_client] Tick size master unavailable, using NSE price bands: {e}")
+            _tick_loaded_day = today
 
-def get_live_market_quotes(instrument_keys: list):
-    """
-    Fetches live LTP and daily OHLC quotes for multiple instruments in a single batch request.
-    """
-    if not instrument_keys or not is_token_active():
-        return {}
-    url = f"{BASE_URL}/market-quote/ohlc?instrument_key=" + ",".join(instrument_keys) + "&interval=1d"
-    try:
-        response = session.get(url, headers=get_headers(), timeout=1.5)
-        if response.status_code == 200:
-            return response.json().get("data", {})
-    except Exception as e:
-        print(f"Error fetching market quotes: {e}")
-    return {}
 
+def tick_size(instrument_key: str, price: float) -> float:
+    _load_tick_map()
+    return _tick_map.get(instrument_key) or _fallback_tick(price)
+
+
+def round_to_tick(price: float, tick: float, mode: str = "nearest") -> float:
+    """mode: 'up' (buy triggers), 'down' (stops), 'nearest'."""
+    price = round(float(price), 2)  # strip float noise from vendors (e.g. 1324.4000244)
+    if tick <= 0:
+        return price
+    n = price / tick
+    n = math.ceil(n - 1e-6) if mode == "up" else math.floor(n + 1e-6) if mode == "down" else round(n)
+    return round(n * tick, 2)
+
+
+# ---------------------------------------------------------------------------
+# Orders (live broker only)
+# ---------------------------------------------------------------------------
 def place_order(
     symbol: str,
     instrument_key: str,
-    quantity: int = 1,
+    quantity: int,
+    transaction_type: str,
+    order_type: str,
     price: float = 0.0,
-    stop_loss: float = 0.0,
-    target: float = 0.0,
-    transaction_type: str = "BUY",
-    order_type: str = "LIMIT",
+    trigger_price: float = 0.0,
     product: str = "I",
-    tag: str = "astra_orb"
+    tag: str = "astra_orb",
 ) -> dict:
     """
-    Places an order via Upstox API V2 (/order/place).
-    If Upstox token is valid and connected, dispatches to broker API.
-    If offline or outside market hours, executes high-fidelity simulated fill.
+    Places an order on Upstox. order_type: MARKET | LIMIT | SL (stop-limit) | SL-M (stop-market).
+    Returns {"success", "order_id", "broker_status", "latency_ms", "detail"}. Never simulates.
     """
-    import time
     t0 = time.perf_counter()
-    
-    order_payload = {
+    payload = {
         "quantity": int(quantity),
         "product": product,
         "validity": "DAY",
-        "price": float(round(price, 2)),
+        "price": float(price) if order_type in ("LIMIT", "SL") else 0.0,
         "tag": tag,
         "instrument_token": instrument_key,
         "order_type": order_type,
         "transaction_type": transaction_type,
         "disclosed_quantity": 0,
-        "trigger_price": float(round(price, 2)) if order_type in ["SL", "SL-M"] else 0.0,
-        "is_amo": False
+        "trigger_price": float(trigger_price) if order_type in ("SL", "SL-M") else 0.0,
+        "is_amo": False,
     }
-    
-    # Live broker execution
-    if is_token_active():
-        url = f"{BASE_URL}/order/place"
+    try:
+        resp = session.post(f"{BASE_URL}/order/place", json=payload, headers=get_headers(), timeout=4.0)
+        latency_ms = round((time.perf_counter() - t0) * 1000, 2)
         try:
-            resp = session.post(url, json=order_payload, headers=get_headers(), timeout=2.0)
-            latency_ms = round((time.perf_counter() - t0) * 1000, 2)
-            if resp.status_code in [200, 201]:
-                data = resp.json().get("data", {})
-                order_id = data.get("order_id") or f"UPSTOX-{int(time.time()*1000)}"
-                return {
-                    "success": True,
-                    "mode": "LIVE_UPSTOX_BROKER",
-                    "order_id": order_id,
-                    "symbol": symbol,
-                    "instrument_key": instrument_key,
-                    "side": transaction_type,
-                    "order_type": order_type,
-                    "price": price,
-                    "stop_loss": stop_loss,
-                    "target": target,
-                    "latency_ms": latency_ms,
-                    "broker_status": "PLACED",
-                    "raw_response": resp.json()
-                }
-            else:
-                # Upstox returned error (e.g. market closed, margin issue)
-                err_data = resp.json() if resp.status_code != 500 else resp.text
-                return {
-                    "success": False,
-                    "mode": "UPSTOX_REJECTED",
-                    "order_id": f"REJ-{int(time.time()*1000)}",
-                    "symbol": symbol,
-                    "instrument_key": instrument_key,
-                    "side": transaction_type,
-                    "order_type": order_type,
-                    "price": price,
-                    "stop_loss": stop_loss,
-                    "target": target,
-                    "latency_ms": latency_ms,
-                    "broker_status": f"HTTP_{resp.status_code}",
-                    "detail": err_data
-                }
-        except Exception as e:
-            latency_ms = round((time.perf_counter() - t0) * 1000, 2)
-            print(f"Error placing live Upstox order for {symbol}: {e}")
-            
-    # Simulated execution fallback (Paper Trading / Simulation Engine)
-    sim_latency = round((time.perf_counter() - t0) * 1000 + 0.8, 2)
-    sim_order_id = f"ASTRA-SIM-{int(time.time()*1000)}"
-    return {
-        "success": True,
-        "mode": "PAPER_TRADING_SIMULATION",
-        "order_id": sim_order_id,
-        "symbol": symbol,
-        "instrument_key": instrument_key,
-        "side": transaction_type,
-        "order_type": order_type,
-        "price": price,
-        "stop_loss": stop_loss,
-        "target": target,
-        "latency_ms": sim_latency,
-        "broker_status": "FILLED",
-        "detail": "Simulated instant fill at 9:15 Candle High"
-    }
+            body = resp.json()
+        except Exception:
+            body = {"raw": resp.text[:500]}
+        if not isinstance(body, dict):
+            body = {"raw": body}
+        if resp.status_code in (200, 201) and body.get("status") == "success":
+            return {"success": True, "order_id": (body.get("data") or {}).get("order_id"),
+                    "broker_status": "PLACED", "latency_ms": latency_ms, "detail": body, "payload": payload}
+        return {"success": False, "order_id": None, "broker_status": f"HTTP_{resp.status_code}",
+                "latency_ms": latency_ms, "detail": body, "payload": payload}
+    except Exception as e:
+        return {"success": False, "order_id": None, "broker_status": "NETWORK_ERROR",
+                "latency_ms": round((time.perf_counter() - t0) * 1000, 2), "detail": str(e), "payload": payload}
+
+
+def get_order_details(order_id: str) -> dict:
+    """Latest broker state for an order: status ('complete', 'open', 'trigger pending', 'rejected', 'cancelled'...)."""
+    try:
+        resp = session.get(f"{BASE_URL}/order/details?order_id={urllib.parse.quote(str(order_id))}",
+                           headers=get_headers(), timeout=3)
+        if resp.status_code == 200:
+            d = resp.json().get("data") or {}
+            return {"ok": True, "status": (d.get("status") or "").lower(), "average_price": float(d.get("average_price") or 0),
+                    "filled_quantity": int(d.get("filled_quantity") or 0), "status_message": d.get("status_message"), "raw": d}
+        return {"ok": False, "status": None, "detail": resp.text[:300]}
+    except Exception as e:
+        return {"ok": False, "status": None, "detail": str(e)}
+
+
+def cancel_order(order_id: str) -> dict:
+    try:
+        resp = session.delete(f"{BASE_URL}/order/cancel?order_id={urllib.parse.quote(str(order_id))}",
+                              headers=get_headers(), timeout=4)
+        return {"ok": resp.status_code == 200, "detail": resp.text[:300]}
+    except Exception as e:
+        return {"ok": False, "detail": str(e)}

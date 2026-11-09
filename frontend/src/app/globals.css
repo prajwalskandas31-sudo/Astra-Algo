@@ -174,3 +174,10 @@ code, pre, .mono {
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5), 0 0 20px rgba(0, 242, 254, 0.08);
   transform: translateY(-1px);
 }
+
+/* Live market panel: stack watchlist above chart on narrow screens */
+@media (max-width: 1100px) {
+  .live-market-grid {
+    grid-template-columns: 1fr !important;
+  }
+}

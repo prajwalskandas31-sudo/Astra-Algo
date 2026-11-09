@@ -1,6 +1,7 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
+import LiveMarketPanel from '@/components/LiveMarketPanel';
 import {
   LayoutDashboard,
   TrendingUp,
@@ -480,7 +481,7 @@ interface OrderAuditItem {
 
 export default function AstraTradingDesk() {
   // Navigation & session state
-  const [currentNav, setCurrentNav] = useState<'dashboard' | 'strategies' | 'builder' | 'runner' | 'audit' | 'users' | 'system'>('dashboard');
+  const [currentNav, setCurrentNav] = useState<'dashboard' | 'charts' | 'strategies' | 'builder' | 'runner' | 'audit' | 'users' | 'system'>('dashboard');
   const [token, setToken] = useState<string | null>(null);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [currentTime, setCurrentTime] = useState('');
@@ -558,6 +559,35 @@ export default function AstraTradingDesk() {
   const [newUsername, setNewUsername] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [newRole, setNewRole] = useState<'user' | 'admin'>('user');
+
+  // Live chart symbol (any symbol in the dashboard opens here)
+  const [chartSymbol, setChartSymbol] = useState<string>('RELIANCE');
+  const openChart = (sym: string) => {
+    if (!sym) return;
+    setChartSymbol(sym);
+    if (currentNav !== 'dashboard' && currentNav !== 'charts') setCurrentNav('charts');
+    setTimeout(() => document.getElementById('live-market')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+  };
+
+  // Keep the session across page reloads (sessionStorage: cleared when the tab closes)
+  useEffect(() => {
+    try {
+      const saved = sessionStorage.getItem('astra_token');
+      if (saved) setToken(saved);
+    } catch { /* storage unavailable */ }
+  }, []);
+  const persistToken = (t: string | null) => {
+    try {
+      if (t) sessionStorage.setItem('astra_token', t);
+      else sessionStorage.removeItem('astra_token');
+    } catch { /* storage unavailable */ }
+  };
+  const handleUnauthorized = useCallback(() => {
+    persistToken(null);
+    setToken(null);
+    setUserProfile(null);
+    setError('Session expired - please sign in again.');
+  }, []);
 
   // Live IST Clock
   useEffect(() => {
@@ -647,6 +677,10 @@ export default function AstraTradingDesk() {
       const res = await fetch(`${API_BASE}/users/me`, {
         headers: { Authorization: `Bearer ${authToken}` },
       });
+      if (res.status === 401) {
+        handleUnauthorized();
+        return;
+      }
       if (res.ok) {
         const data = await res.json();
         setUserProfile(data);
@@ -757,6 +791,7 @@ export default function AstraTradingDesk() {
       }
 
       const data = await res.json();
+      persistToken(data.access_token);
       setToken(data.access_token);
       await fetchAllData(data.access_token);
     } catch (err: any) {
@@ -767,6 +802,7 @@ export default function AstraTradingDesk() {
   };
 
   const handleLogout = () => {
+    persistToken(null);
     setToken(null);
     setUserProfile(null);
     setCurrentNav('dashboard');
@@ -909,9 +945,13 @@ export default function AstraTradingDesk() {
     setError('');
     setSuccessMsg('');
     try {
-      const res = await fetch(`${API_BASE}/notifications/send-button`, { method: 'POST' });
+      const res = await fetch(`${API_BASE}/notifications/send-button`, {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
       if (res.ok) {
-        setSuccessMsg('1-Click Upstox Authorize Button delivered to WhatsApp (+91 7022463267)!');
+        const body = await res.json();
+        setSuccessMsg(`1-Click Upstox Authorize Button sent to WhatsApp (${body.recipient || 'auth phone'}).`);
         if (token) fetchAuditLogs(token);
       }
     } catch (err: any) {
@@ -1461,6 +1501,15 @@ export default function AstraTradingDesk() {
             </button>
 
             <button
+              id="nav-charts"
+              onClick={() => setCurrentNav('charts')}
+              className={`sidebar-link ${currentNav === 'charts' ? 'active' : ''}`}
+            >
+              <Activity size={18} />
+              <span>Live Charts</span>
+            </button>
+
+            <button
               id="nav-strategies"
               onClick={() => setCurrentNav('strategies')}
               className={`sidebar-link ${currentNav === 'strategies' ? 'active' : ''}`}
@@ -1614,6 +1663,7 @@ export default function AstraTradingDesk() {
           <div style={{ display: 'flex', alignItems: 'center', gap: '1.2rem' }}>
             <h2 style={{ fontSize: '1.1rem', fontWeight: 700, color: '#fff' }}>
               {currentNav === 'dashboard' && 'Executive Desk Dashboard'}
+              {currentNav === 'charts' && 'Live Charts · Nifty 50 1-Minute with ORB Levels'}
               {currentNav === 'strategies' && 'Algorithmic Strategies Suite & Comparison'}
               {currentNav === 'builder' && 'Strategy Studio & AI Quant Synthesizer (Add & Edit)'}
               {currentNav === 'runner' && 'Multi-Strategy Simultaneous Execution Matrix'}
@@ -1775,6 +1825,20 @@ export default function AstraTradingDesk() {
                     </button>
                   </div>
                 </div>
+              </div>
+
+              {/* Live market: watchlist + 1-min chart with PDH / 09:15 / entry / SL / target overlays + session trades */}
+              <div id="live-market" style={{ marginBottom: '1.5rem', scrollMarginTop: '1rem' }}>
+                {token && (
+                  <LiveMarketPanel
+                    apiBase={API_BASE}
+                    token={token}
+                    symbol={chartSymbol}
+                    onSymbolChange={setChartSymbol}
+                    chartHeight={420}
+                    onUnauthorized={handleUnauthorized}
+                  />
+                )}
               </div>
 
               {/* Live API Health Indicators Panel */}
@@ -2107,23 +2171,13 @@ export default function AstraTradingDesk() {
                   {/* Stock List Display */}
                   <div style={{ maxHeight: '220px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.45rem', paddingRight: '0.3rem' }}>
                     {phase1ActiveTab === 'tracked' ? (
-                      (phase1Data?.tracked_stocks || [
-                        { symbol: 'RELIANCE', open: 2492.5, prev_day_high: 2500.0, diff: -7.5 },
-                        { symbol: 'TCS', open: 3940.0, prev_day_high: 3950.0, diff: -10.0 },
-                        { symbol: 'INFY', open: 1882.0, prev_day_high: 1895.0, diff: -13.0 },
-                        { symbol: 'LT', open: 3610.0, prev_day_high: 3620.0, diff: -10.0 },
-                        { symbol: 'ITC', open: 488.5, prev_day_high: 490.0, diff: -1.5 },
-                        { symbol: 'TATASTEEL', open: 153.5, prev_day_high: 155.0, diff: -1.5 },
-                        { symbol: 'MARUTI', open: 12380.0, prev_day_high: 12400.0, diff: -20.0 },
-                        { symbol: 'BEL', open: 292.0, prev_day_high: 295.0, diff: -3.0 },
-                        { symbol: 'TRENT', open: 7610.0, prev_day_high: 7650.0, diff: -40.0 },
-                        { symbol: 'HCLTECH', open: 1828.0, prev_day_high: 1840.0, diff: -12.0 },
-                        { symbol: 'SUNPHARMA', open: 1865.0, prev_day_high: 1880.0, diff: -15.0 },
-                        { symbol: 'TITAN', open: 3430.0, prev_day_high: 3450.0, diff: -20.0 },
-                      ]).map((stk: any, idx: number) => (
+                      (phase1Data?.tracked_stocks || []).map((stk: any, idx: number) => (
                         <div
                           key={idx}
+                          onClick={() => openChart(stk.symbol)}
+                          title="Open in live chart"
                           style={{
+                            cursor: 'pointer',
                             display: 'flex',
                             justifyContent: 'space-between',
                             alignItems: 'center',
@@ -2141,24 +2195,18 @@ export default function AstraTradingDesk() {
                             </span>
                           </div>
                           <span className="mono" style={{ color: 'var(--accent-green)', fontWeight: 700, fontSize: '0.74rem' }}>
-                            -₹{Math.abs(stk.delta_from_pdh ?? stk.diff ?? 0).toFixed(2)} Below PDH ✓
+                            {stk.delta_from_pdh == null ? 'Open pending ⏳' : `-₹${Math.abs(stk.delta_from_pdh).toFixed(2)} Below PDH ✓`}
                           </span>
                         </div>
                       ))
                     ) : (
-                      (phase1Data?.disqualified_stocks || [
-                        { symbol: 'HDFCBANK', open: 1658.0, prev_day_high: 1650.0, diff: 8.0 },
-                        { symbol: 'ICICIBANK', open: 1245.0, prev_day_high: 1240.0, diff: 5.0 },
-                        { symbol: 'SBIN', open: 798.5, prev_day_high: 795.0, diff: 3.5 },
-                        { symbol: 'AXISBANK', open: 1184.0, prev_day_high: 1180.0, diff: 4.0 },
-                        { symbol: 'KOTAKBANK', open: 1785.0, prev_day_high: 1780.0, diff: 5.0 },
-                        { symbol: 'BAJFINANCE', open: 7165.0, prev_day_high: 7150.0, diff: 15.0 },
-                        { symbol: 'HINDUNILVR', open: 2470.0, prev_day_high: 2460.0, diff: 10.0 },
-                        { symbol: 'ADANIENT', open: 3135.0, prev_day_high: 3120.0, diff: 15.0 },
-                      ]).map((stk: any, idx: number) => (
+                      (phase1Data?.disqualified_stocks || []).map((stk: any, idx: number) => (
                         <div
                           key={idx}
+                          onClick={() => openChart(stk.symbol)}
+                          title="Open in live chart"
                           style={{
+                            cursor: 'pointer',
                             display: 'flex',
                             justifyContent: 'space-between',
                             alignItems: 'center',
@@ -2176,7 +2224,7 @@ export default function AstraTradingDesk() {
                             </span>
                           </div>
                           <span className="mono" style={{ color: '#fca5a5', fontWeight: 700, fontSize: '0.74rem' }}>
-                            +₹{Math.abs(stk.delta_from_pdh ?? stk.diff ?? 0).toFixed(2)} Gapped Above ✗
+                            {stk.delta_from_pdh == null ? (stk.reason || 'No data') : `+₹${Math.abs(stk.delta_from_pdh).toFixed(2)} Gapped Above ✗`}
                           </span>
                         </div>
                       ))
@@ -2246,19 +2294,19 @@ export default function AstraTradingDesk() {
                     <div style={{ padding: '0.6rem', background: 'rgba(255, 255, 255, 0.03)', borderRadius: '6px', textAlign: 'center' }}>
                       <span style={{ fontSize: '0.65rem', color: 'var(--text-dim)', display: 'block' }}>CANDIDATES</span>
                       <span className="mono" style={{ fontSize: '1.1rem', fontWeight: 800, color: '#fff' }}>
-                        {phase2Data?.tracked_candidates_count ?? (phase1Data?.tracked_stocks_count ?? 38)}
+                        {(phase2Data as any)?.total_tracked_stocks_evaluated ?? phase1Data?.tracked_stocks_count ?? '–'}
                       </span>
                     </div>
                     <div style={{ padding: '0.6rem', background: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.3)', borderRadius: '6px', textAlign: 'center' }}>
                       <span style={{ fontSize: '0.65rem', color: 'var(--accent-green)', display: 'block', fontWeight: 700 }}>BREAKOUTS</span>
                       <span className="mono" style={{ fontSize: '1.1rem', fontWeight: 800, color: 'var(--accent-green)' }}>
-                        {phase2Data?.confirmed_breakouts_count ?? 12}
+                        {(phase2Data as any)?.breakouts_confirmed ?? '–'}
                       </span>
                     </div>
                     <div style={{ padding: '0.6rem', background: 'rgba(0, 242, 254, 0.08)', border: '1px solid rgba(0, 242, 254, 0.2)', borderRadius: '6px', textAlign: 'center' }}>
                       <span style={{ fontSize: '0.65rem', color: 'var(--accent-cyan)', display: 'block', fontWeight: 700 }}>LATENCY</span>
                       <span className="mono" style={{ fontSize: '1.1rem', fontWeight: 800, color: 'var(--accent-cyan)' }}>
-                        {phase2Data?.execution_latency_ms ?? 14.5} ms
+                        {phase2Data?.execution_latency_ms != null ? `${phase2Data.execution_latency_ms} ms` : '–'}
                       </span>
                     </div>
                   </div>
@@ -2283,7 +2331,7 @@ export default function AstraTradingDesk() {
                     </h3>
                   </div>
                   <span style={{ fontSize: '0.72rem', color: 'var(--text-dim)' }}>
-                    Total Orders Logged: <b>{strategyOrders.length || (phase2Data?.orders?.length ?? 6)}</b>
+                    Total Orders Logged: <b>{strategyOrders.length}</b>
                   </span>
                 </div>
 
@@ -2302,15 +2350,11 @@ export default function AstraTradingDesk() {
                       </tr>
                     </thead>
                     <tbody>
-                      {(strategyOrders.length > 0 ? strategyOrders.slice(0, 8) : [
-                        { symbol: 'RELIANCE', order_id: 'ASTRA-SIM-1792582306964', entry_price: 2515.0, stop_loss: 2488.0, target_price: 2569.0, risk_per_share: 27.0, status: 'ORDER_PLACED' },
-                        { symbol: 'INFY', order_id: 'ASTRA-SIM-1792582306964', entry_price: 1908.0, stop_loss: 1878.0, target_price: 1968.0, risk_per_share: 30.0, status: 'ORDER_PLACED' },
-                        { symbol: 'LT', order_id: 'ASTRA-SIM-1792582306975', entry_price: 3628.0, stop_loss: 3602.0, target_price: 3680.0, risk_per_share: 26.0, status: 'ORDER_PLACED' },
-                        { symbol: 'ITC', order_id: 'ASTRA-SIM-1792582306978', entry_price: 492.0, stop_loss: 487.0, target_price: 502.0, risk_per_share: 5.0, status: 'ORDER_PLACED' },
-                        { symbol: 'TATASTEEL', order_id: 'ASTRA-SIM-1792582306978', entry_price: 156.8, stop_loss: 152.9, target_price: 164.6, risk_per_share: 3.9, status: 'ORDER_PLACED' },
-                        { symbol: 'MARUTI', order_id: 'ASTRA-SIM-1792582306980', entry_price: 12440.0, stop_loss: 12350.0, target_price: 12620.0, risk_per_share: 90.0, status: 'ORDER_PLACED' },
-                      ]).map((ord, idx) => (
-                        <tr key={idx} style={{ borderBottom: '1px solid rgba(255, 255, 255, 0.04)' }}>
+                      {strategyOrders.length === 0 && (
+                        <tr><td colSpan={8} style={{ padding: '1rem', textAlign: 'center', color: 'var(--text-dim)' }}>No orders recorded yet.</td></tr>
+                      )}
+                      {strategyOrders.slice(0, 12).map((ord: any, idx) => (
+                        <tr key={idx} onClick={() => openChart(ord.symbol)} title="Open in live chart" style={{ borderBottom: '1px solid rgba(255, 255, 255, 0.04)', cursor: 'pointer' }}>
                           <td style={{ padding: '0.65rem', fontWeight: 800, color: '#fff' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
                               <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: 'var(--accent-green)' }}></span>
@@ -2339,7 +2383,7 @@ export default function AstraTradingDesk() {
                           </td>
                           <td style={{ padding: '0.65rem' }}>
                             <span style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--accent-green)', background: 'var(--accent-green-bg)', padding: '0.15rem 0.45rem', borderRadius: '4px' }}>
-                              {ord.status || 'FILLED'}
+                              {ord.status}{ord.mode ? ` · ${ord.mode}` : ''}{ord.session_date ? ` · ${ord.session_date}` : ''}
                             </span>
                           </td>
                         </tr>
@@ -2433,6 +2477,19 @@ export default function AstraTradingDesk() {
           {/* =========================================================================
               SECTION 2: STRATEGIES PAGE (DROPDOWN + COMPARISON MODE)
               ========================================================================= */}
+          {currentNav === 'charts' && token && (
+            <div id="live-market" className="animate-fade-in">
+              <LiveMarketPanel
+                apiBase={API_BASE}
+                token={token}
+                symbol={chartSymbol}
+                onSymbolChange={setChartSymbol}
+                chartHeight={600}
+                onUnauthorized={handleUnauthorized}
+              />
+            </div>
+          )}
+
           {currentNav === 'strategies' && (
             <div className="animate-fade-in">
               {/* Header Bar with Strategy Selector Dropdown */}
@@ -2807,8 +2864,11 @@ export default function AstraTradingDesk() {
                         <h4 style={{ fontSize: '1rem', fontWeight: 700, color: '#fff' }}>
                           Comprehensive Metrics
                         </h4>
-                        <span style={{ fontSize: '0.7rem', color: 'var(--accent-cyan)', background: 'rgba(0,242,254,0.08)', padding: '0.2rem 0.5rem', borderRadius: '4px', border: '1px solid rgba(0,242,254,0.2)' }}>
-                          Institutional Tier
+                        <span
+                          title="These figures are stored seed / user-entered values, not results computed by a backtest. Validate with the backtester before relying on them."
+                          style={{ fontSize: '0.7rem', color: 'var(--accent-amber)', background: 'var(--accent-amber-bg)', padding: '0.2rem 0.5rem', borderRadius: '4px', border: '1px solid rgba(245,158,11,0.3)' }}
+                        >
+                          ⚠ Unverified · not backtested
                         </span>
                       </div>
 

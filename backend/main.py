@@ -14,9 +14,9 @@ import pytz
 from typing import List, Optional
 
 try:
-    from . import models, schemas, auth, database, security_middleware, strategy, upstox_client, generate_token
+    from . import models, schemas, auth, database, security_middleware, strategy, upstox_client, generate_token, market_data
 except ImportError:
-    import models, schemas, auth, database, security_middleware, strategy, upstox_client, generate_token
+    import models, schemas, auth, database, security_middleware, strategy, upstox_client, generate_token, market_data
 
 # Create database tables
 models.Base.metadata.create_all(bind=database.engine)
@@ -90,9 +90,10 @@ def auth_callback(request: Request, code: str = None):
     base_url = resolve_base_url(request)
     token = generate_token.get_access_token(code, redirect_uri=base_url)
     if token:
-        # Update in-memory runtime
+        # Update in-memory runtime (and drop the cached "expired" status so trading resumes immediately)
         os.environ["UPSTOX_ACCESS_TOKEN"] = token
-        upstox_client.UPSTOX_ACCESS_TOKEN = token
+        upstox_client.set_access_token(token)
+        market_data.clear_cache()
         
         # Persist to .env file
         env_path = os.path.join(os.path.dirname(__file__), "..", ".env")
@@ -217,6 +218,8 @@ def get_strategy_status(current_user: models.User = Depends(auth.get_current_act
     
     return {
         "server_time_ist": now_ist,
+        "trading_mode": strategy.TRADING_MODE,
+        "session_date": strategy.CURRENT_SESSION_DATE,
         "strategy_name": "Open Range Breakout (ORB) - Two-Stage Execution",
         "timeframe": "1-minute (Phase 1 at 09:15:00 AM, Phase 2 at 09:16:00 AM IST)",
         "scheduler": {
@@ -303,9 +306,22 @@ def get_strategy_orders(db: Session = Depends(database.get_db), current_user: mo
     Returns history of trade orders executed on confirmed 09:15 breakout setups.
     """
     db_orders = db.query(models.OrderAuditLog).order_by(models.OrderAuditLog.id.desc()).limit(100).all()
-    if not db_orders:
-        return strategy.ORDER_HISTORY
-    return db_orders
+    return [{c.name: getattr(o, c.name) for c in models.OrderAuditLog.__table__.columns} for o in db_orders]
+
+@app.get("/strategy/trades")
+def get_strategy_trades(current_user: models.User = Depends(auth.get_current_active_user)):
+    """Current session's trades with live status, fills, exits and P&L (paper trades re-simulated on fresh candles)."""
+    trades = strategy.get_trades()
+    realized = [t["pnl"] for t in trades if t.get("pnl") is not None]
+    return {
+        "session_date": strategy.CURRENT_SESSION_DATE,
+        "trading_mode": strategy.TRADING_MODE,
+        "trades": trades,
+        "realized_pnl": round(sum(realized), 2),
+        "unrealized_pnl": round(sum(t.get("unrealized_pnl") or 0 for t in trades), 2),
+        "wins": sum(1 for p in realized if p > 0),
+        "losses": sum(1 for p in realized if p < 0),
+    }
 
 @app.get("/strategy/logs")
 def get_strategy_logs(current_user: models.User = Depends(auth.get_current_active_user)):
@@ -315,6 +331,78 @@ def get_strategy_logs(current_user: models.User = Depends(auth.get_current_activ
         "phase1_tracked": strategy.PHASE1_TRACKED_STOCKS,
         "orders": strategy.ORDER_HISTORY
     }
+
+
+# ---------------------------------------------------------------------------
+# Live market data for the charts & watchlist
+# ---------------------------------------------------------------------------
+@app.get("/market/universe")
+def market_universe(current_user: models.User = Depends(auth.get_current_active_user)):
+    return market_data.UNIVERSE
+
+@app.get("/market/candles")
+def market_candles(
+    symbol: str,
+    sessions: int = 1,
+    current_user: models.User = Depends(auth.get_current_active_user)
+):
+    """
+    1-minute candles for the chart plus every strategy overlay needed to verify a signal by eye:
+    previous day high, the 09:15 candle, entry / stop / target and fills of the session's trade.
+    """
+    symbol = symbol.upper()
+    if not market_data.instrument_key_for(symbol):
+        raise HTTPException(status_code=404, detail=f"{symbol} is not in the Nifty 50 universe")
+    sessions = max(1, min(sessions, 5))
+    payload = market_data.intraday_candles(symbol, sessions=sessions)
+    candles = payload["candles"]
+    session = market_data.ist_date(candles[-1]["t"]) if candles else None
+    overlays = {"pdh": None, "pdh_date": None, "orb_candle": None, "trade": None, "session_date": session.isoformat() if session else None}
+    if session:
+        p = market_data.previous_day_high(symbol, session)
+        overlays.update(pdh=p["pdh"], pdh_date=p["pdh_date"])
+        overlays["orb_candle"] = market_data.candle_at(candles, session, 9, 15)
+        for t in strategy.get_trades(session.isoformat()):
+            if t["symbol"] == symbol:
+                overlays["trade"] = t
+    last = candles[-1] if candles else None
+    return {
+        "symbol": symbol,
+        "source": payload["source"],
+        "candles": candles,
+        "last_price": last["c"] if last else None,
+        "last_bar_time": last["t"] if last else None,
+        "server_time": int(time.time()),
+        "overlays": overlays,
+    }
+
+@app.get("/market/watchlist")
+def market_watchlist(current_user: models.User = Depends(auth.get_current_active_user)):
+    """Live quotes for the whole Nifty 50 with PDH, distance to PDH and today's ORB status."""
+    return _build_watchlist()
+
+def _build_watchlist():
+    q = market_data.quotes()
+    session = strategy.resolve_session()
+    p1 = {s["symbol"]: s for s in (strategy.PHASE1_TRACKED_STOCKS + strategy.PHASE1_DISQUALIFIED_STOCKS)}
+    trades = {t["symbol"]: t for t in strategy.get_trades(session.isoformat())}
+    with ThreadPoolExecutor(max_workers=10) as ex:
+        pdhs = {r["symbol"]: r for r in ex.map(lambda u: market_data.previous_day_high(u["symbol"], session), market_data.UNIVERSE)}
+    rows = []
+    for u in market_data.UNIVERSE:
+        s = u["symbol"]
+        quote = q.get(s) or {}
+        pdh = (pdhs.get(s) or {}).get("pdh")
+        ltp = quote.get("ltp")
+        trade = trades.get(s)
+        rows.append({
+            "symbol": s, "sector": u["sector"], "ltp": ltp, "open": quote.get("open"), "high": quote.get("high"),
+            "low": quote.get("low"), "prev_close": quote.get("prev_close"), "change_pct": quote.get("change_pct"),
+            "prev_high": pdh, "pct_from_pdh": round((ltp - pdh) / pdh * 100, 2) if (ltp and pdh) else None,
+            "above_pdh": bool(ltp and pdh and ltp > pdh), "phase1_status": (p1.get(s) or {}).get("status"),
+            "trade_status": trade["status"] if trade else None, "source": quote.get("source"),
+        })
+    return {"session_date": session.isoformat(), "rows": rows, "server_time": int(time.time())}
 
 
 @app.get("/notifications/audit-logs", response_model=List[schemas.NotificationAuditLogOut])
@@ -506,7 +594,7 @@ def generate_strategy_with_ai(
     if not raw_prompt:
         raise HTTPException(status_code=400, detail="Strategy description cannot be empty.")
 
-    gemini_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "AIzaSyAUHxIqid8WL3NJI-I_rvA-FqL9bZSlGTk"
+    gemini_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
     
     # Attempt real Google Gemini API structured generation
     if gemini_key:
@@ -857,8 +945,8 @@ def get_system_live_health(
                 "status": "CONNECTED" if wa_healthy else "ERROR",
                 "phone_id": strategy.WHATSAPP_PHONE_ID,
                 "verified_name": wa_detail.get("verified_name", "WhatsApp Desk"),
-                "display_phone": wa_detail.get("display_phone_number", "+91 82170 99271"),
-                "quality_rating": wa_detail.get("quality_rating", "GREEN"),
+                "display_phone": wa_detail.get("display_phone_number"),
+                "quality_rating": wa_detail.get("quality_rating"),
                 "recipients_configured": len(strategy.parse_recipient_list(strategy.WHATSAPP_RECIPIENT_PHONE)),
                 "latency_ms": wa_lat
             },
@@ -866,8 +954,8 @@ def get_system_live_health(
                 "name": "Telegram Trading Desk Bot",
                 "healthy": tg_healthy,
                 "status": "CONNECTED" if tg_healthy else "ERROR",
-                "bot_username": tg_detail.get("username", "astra_algobot"),
-                "bot_name": tg_detail.get("first_name", "astra_algo"),
+                "bot_username": tg_detail.get("username"),
+                "bot_name": tg_detail.get("first_name"),
                 "chat_groups_configured": len(strategy.parse_recipient_list(strategy.TELEGRAM_CHAT_ID)),
                 "latency_ms": tg_lat
             },
@@ -914,15 +1002,21 @@ def get_dashboard_metrics(
     
     broker_info = upstox_client.test_connection()
     
-    stocks = [
-        {"symbol": "RELIANCE", "ltp": 2508.00, "prev_high": 2500.00, "open": 2492.50, "high": 2515.00, "low": 2488.00, "change_pct": "+0.62%", "trend": "BULLISH", "breakout": True},
-        {"symbol": "TCS", "ltp": 3945.00, "prev_high": 3950.00, "open": 3940.00, "high": 3948.00, "low": 3935.00, "change_pct": "-0.13%", "trend": "RANGE", "breakout": False},
-        {"symbol": "HDFCBANK", "ltp": 1642.50, "prev_high": 1638.00, "open": 1635.00, "high": 1646.00, "low": 1632.00, "change_pct": "+0.55%", "trend": "BULLISH", "breakout": True},
-        {"symbol": "INFY", "ltp": 1820.00, "prev_high": 1825.00, "open": 1818.00, "high": 1822.00, "low": 1812.00, "change_pct": "+0.18%", "trend": "NEUTRAL", "breakout": False},
-        {"symbol": "ICICIBANK", "ltp": 1265.40, "prev_high": 1260.00, "open": 1258.00, "high": 1268.00, "low": 1255.00, "change_pct": "+0.72%", "trend": "BULLISH", "breakout": True},
-        {"symbol": "SBIN", "ltp": 792.80, "prev_high": 796.00, "open": 794.00, "high": 795.50, "low": 790.00, "change_pct": "-0.40%", "trend": "BEARISH", "breakout": False},
-    ]
-    
+    # Real quotes only (Upstox, else Yahoo). Shows the 6 names with today's largest moves.
+    stocks = []
+    try:
+        rows = [r for r in _build_watchlist()["rows"] if r["ltp"]]
+        rows.sort(key=lambda r: abs(r["change_pct"] or 0), reverse=True)
+        for r in rows[:6]:
+            chg = r["change_pct"]
+            stocks.append({
+                "symbol": r["symbol"], "ltp": r["ltp"], "prev_high": r["prev_high"], "open": r["open"], "high": r["high"],
+                "low": r["low"], "change_pct": f"{chg:+.2f}%" if chg is not None else "-",
+                "trend": "ABOVE PDH" if r["above_pdh"] else "BELOW PDH", "breakout": r["above_pdh"], "source": r["source"],
+            })
+    except Exception as e:
+        print(f"Watchlist snapshot unavailable: {e}")
+
     return {
         "server_time_ist": now_ist,
         "last_whatsapp_call": {
@@ -969,9 +1063,8 @@ def test_notifications(
         "dispatches": result
     }
 
-@app.get("/notifications/send-button")
 @app.post("/notifications/send-button")
-def send_reauth_button(request: Request):
+def send_reauth_button(request: Request, current_user: models.User = Depends(auth.get_current_active_user)):
     """
     Dispatches a native clickable WhatsApp CTA URL button to authorize Upstox on demand.
     """
@@ -1031,6 +1124,17 @@ def startup_event():
                     print(f"Schema migration warning for {col_name}: {alter_err}")
     except Exception as pragma_err:
         print(f"PRAGMA check warning: {pragma_err}")
+
+    # Trade-lifecycle columns on order_audit_logs
+    try:
+        from sqlalchemy import text
+        existing_cols = [row[1] for row in db.execute(text("PRAGMA table_info(order_audit_logs)")).fetchall()]
+        for col_name, col_type in models.ORDER_AUDIT_MIGRATIONS.items():
+            if existing_cols and col_name not in existing_cols:
+                db.execute(text(f"ALTER TABLE order_audit_logs ADD COLUMN {col_name} {col_type}"))
+                db.commit()
+    except Exception as mig_err:
+        print(f"order_audit_logs migration warning: {mig_err}")
 
     # Migrate any legacy 'opening_high_breakout' key to 'open_range_breakout'
     try:
@@ -1256,27 +1360,28 @@ def startup_event():
             id='market_open_phase1_filter',
             replace_existing=True
         )
-        # 3. 09:16:00 AM: Phase 2 Candle Close Breakout & Order Execution (tracks only Phase 1 stocks, close > PDH, Buy at High, SL at Low, Target 2x)
+        # 3. 09:16:01 AM: Phase 2 on the CLOSED 09:15 candle (waits up to 45s for the bar to be published)
         scheduler.add_job(
-            strategy.phase2_candle_close_job, 
-            'cron', 
-            day_of_week='mon-fri', 
-            hour=9, 
-            minute=16,
-            second=0,
-            id='candle_close_phase2_execution',
-            replace_existing=True
-        )
-
-        # 3. 09:17 - 15:15: Intraday 1-minute Target & Stop Loss monitor for active setups
-        scheduler.add_job(
-            strategy.intraday_trade_monitor_job,
+            strategy.phase2_candle_close_job,
             'cron',
             day_of_week='mon-fri',
-            hour='9-15',
-            minute='*',
+            hour=9,
+            minute=16,
+            second=1,
+            id='candle_close_phase2_execution',
+            replace_existing=True,
+            misfire_grace_time=60,
+        )
+
+        # 4. Trade manager every 10s (the job itself only acts 09:16-15:25 IST): fills, stop, target, 15:15 square-off
+        scheduler.add_job(
+            strategy.intraday_trade_monitor_job,
+            'interval',
+            seconds=10,
             id='intraday_trade_monitor',
-            replace_existing=True
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
         )
         # 4. 15:30 PM: Daily market close recap
         scheduler.add_job(
@@ -1288,4 +1393,8 @@ def startup_event():
             id='market_close_report',
             replace_existing=True
         )
+        strategy.restore_session_trades()
         scheduler.start()
+        import threading
+        threading.Thread(target=market_data.warm_daily_cache, daemon=True, name="WarmPDH").start()
+        print(f"[startup] Trading mode: {strategy.TRADING_MODE.upper()} | universe: {len(strategy.NIFTY_50_UNIVERSE)} stocks")

@@ -92,4 +92,32 @@ class OrderAuditLog(Base):
     broker_status = Column(String, default="FILLED")
     mode = Column(String, default="LIVE_ORB")
     details = Column(Text, nullable=True)
+    # Trade lifecycle (added with the live-chart / trade-manager upgrade; migrated in main.startup_event)
+    session_date = Column(String, index=True, nullable=True)
+    quantity = Column(Integer, nullable=True)
+    sl_order_id = Column(String, nullable=True)
+    exit_order_id = Column(String, nullable=True)
+    entry_fill_price = Column(Float, nullable=True)
+    entry_time = Column(String, nullable=True)
+    exit_price = Column(Float, nullable=True)
+    exit_time = Column(String, nullable=True)
+    pnl = Column(Float, nullable=True)
+    r_multiple = Column(Float, nullable=True)
+    data_source = Column(String, nullable=True)
+
+
+# Columns added after the first release; SQLite needs ALTER TABLE for existing databases.
+ORDER_AUDIT_MIGRATIONS = {
+    "session_date": "VARCHAR",
+    "quantity": "INTEGER",
+    "sl_order_id": "VARCHAR",
+    "exit_order_id": "VARCHAR",
+    "entry_fill_price": "FLOAT",
+    "entry_time": "VARCHAR",
+    "exit_price": "FLOAT",
+    "exit_time": "VARCHAR",
+    "pnl": "FLOAT",
+    "r_multiple": "FLOAT",
+    "data_source": "VARCHAR",
+}
 

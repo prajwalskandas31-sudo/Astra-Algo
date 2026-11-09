@@ -36,3 +36,12 @@ frontend/out/
 .vscode/
 .idea/
 .DS_Store
+
+# Backtester local artefacts (data is pulled once; runs are reproducible from strategy+config+checksum)
+backtester/.venv/
+backtester/data_store/
+backtester/logs/
+backtester/runs/
+
+# Backend runtime caches
+backend/data/tick_sizes.json
