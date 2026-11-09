@@ -479,12 +479,70 @@ interface OrderAuditItem {
   created_at: string;
 }
 
+// ---------------------------------------------------------------------------
+// Small display helpers shared by every page
+// ---------------------------------------------------------------------------
+const fmtNum = (n: any, d = 2) =>
+  n === null || n === undefined || n === '' || Number.isNaN(Number(n))
+    ? '–'
+    : Number(n).toLocaleString('en-IN', { minimumFractionDigits: d, maximumFractionDigits: d });
+const fmtINR = (n: any) => (n === null || n === undefined ? '–' : `₹${fmtNum(n)}`);
+const fmtSigned = (n: any) => (n === null || n === undefined ? '–' : `${Number(n) >= 0 ? '+' : '−'}₹${fmtNum(Math.abs(Number(n)))}`);
+const humanize = (s?: string | null) => (s ? s.replace(/_/g, ' ').toLowerCase().replace(/^\w/, (c) => c.toUpperCase()) : '–');
+
+function toneFor(status?: string | null): 'good' | 'bad' | 'warn' | 'info' | '' {
+  if (!status) return '';
+  if (['TARGET_HIT', 'CONNECTED', 'ONLINE', 'RUNNING', 'SENT', 'OPERATIONAL'].includes(status)) return 'good';
+  if (['STOP_LOSS_HIT', 'ENTRY_REJECTED', 'EXPIRED', 'ERROR', 'FAILED', 'STOPPED'].includes(status) || status.startsWith('HTTP_')) return 'bad';
+  if (['PENDING_ENTRY', 'DEGRADED', 'CONFIG_MISSING', 'UNCONFIGURED', 'SKIPPED', 'REPLAY', 'PAPER'].includes(status)) return 'warn';
+  if (['OPEN', 'LIVE'].includes(status)) return 'info';
+  return '';
+}
+
+function istMarketOpen(): boolean {
+  const now = new Date(Date.now() + 19800 * 1000);
+  const day = now.getUTCDay();
+  const mins = now.getUTCHours() * 60 + now.getUTCMinutes();
+  return day >= 1 && day <= 5 && mins >= 555 && mins < 930;
+}
+
+// Self-contained clock: ticking every second re-renders only this text, not the whole desk.
+function IstClock() {
+  const [now, setNow] = useState('');
+  useEffect(() => {
+    const fmt = () =>
+      new Date().toLocaleString('en-IN', {
+        timeZone: 'Asia/Kolkata', hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit',
+        day: '2-digit', month: 'short', year: 'numeric',
+      }) + ' IST';
+    setNow(fmt());
+    const id = setInterval(() => setNow(fmt()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  return <>{now || '…'}</>;
+}
+
+const LOGO_STYLE: React.CSSProperties = {
+  width: 34, height: 34, borderRadius: 9, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
+  background: 'linear-gradient(135deg, #00f2fe 0%, #4facfe 100%)', color: '#04101f', fontWeight: 800, fontSize: '0.9rem',
+};
+
+const PAGE_META: Record<string, { title: string; sub: string }> = {
+  dashboard: { title: 'Dashboard', sub: "Today's ORB run, live market and orders" },
+  charts: { title: 'Live Charts', sub: 'Nifty 50 · 1-minute candles with strategy levels' },
+  strategies: { title: 'Strategies', sub: 'Rules and recorded metrics' },
+  builder: { title: 'Strategy Studio', sub: 'Draft and edit strategy definitions' },
+  runner: { title: 'Multi-strategy Runner', sub: 'Run selected strategies together' },
+  audit: { title: 'Alerts Log', sub: 'Every WhatsApp and Telegram message sent' },
+  users: { title: 'Users & Roles', sub: 'Who can access the desk' },
+  system: { title: 'System Status', sub: 'Broker, alerts and scheduler health' },
+};
+
 export default function AstraTradingDesk() {
   // Navigation & session state
   const [currentNav, setCurrentNav] = useState<'dashboard' | 'charts' | 'strategies' | 'builder' | 'runner' | 'audit' | 'users' | 'system'>('dashboard');
   const [token, setToken] = useState<string | null>(null);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
-  const [currentTime, setCurrentTime] = useState('');
   const [error, setError] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
   const [loading, setLoading] = useState(false);
@@ -560,6 +618,18 @@ export default function AstraTradingDesk() {
   const [newPassword, setNewPassword] = useState('');
   const [newRole, setNewRole] = useState<'user' | 'admin'>('user');
 
+  // Session trades summary (P&L) for the dashboard KPIs
+  const [tradesSummary, setTradesSummary] = useState<any | null>(null);
+  const [phase2View, setPhase2View] = useState<'setups' | 'all'>('setups');
+  const fetchTradesSummary = async (authToken?: string) => {
+    const t = authToken || token;
+    if (!t) return;
+    try {
+      const res = await fetch(`${API_BASE}/strategy/trades`, { headers: { Authorization: `Bearer ${t}` } });
+      if (res.ok) setTradesSummary(await res.json());
+    } catch { /* keep last value */ }
+  };
+
   // Live chart symbol (any symbol in the dashboard opens here)
   const [chartSymbol, setChartSymbol] = useState<string>('RELIANCE');
   const openChart = (sym: string) => {
@@ -589,25 +659,6 @@ export default function AstraTradingDesk() {
     setError('Session expired - please sign in again.');
   }, []);
 
-  // Live IST Clock
-  useEffect(() => {
-    const timer = setInterval(() => {
-      const now = new Date();
-      setCurrentTime(
-        now.toLocaleString('en-IN', {
-          timeZone: 'Asia/Kolkata',
-          hour12: false,
-          hour: '2-digit',
-          minute: '2-digit',
-          second: '2-digit',
-          day: '2-digit',
-          month: 'short',
-          year: 'numeric',
-        }) + ' IST'
-      );
-    }, 1000);
-    return () => clearInterval(timer);
-  }, []);
 
   // Periodic health check & dashboard poll
   useEffect(() => {
@@ -618,6 +669,7 @@ export default function AstraTradingDesk() {
         fetchDashboardMetrics(token);
         fetchStrategyStatus(token);
         fetchStrategyOrders(token);
+        fetchTradesSummary(token);
       }, 15000);
       return () => clearInterval(pollTimer);
     }
@@ -632,6 +684,7 @@ export default function AstraTradingDesk() {
       fetchAuditLogs(authToken),
       fetchStrategyStatus(authToken),
       fetchStrategyOrders(authToken),
+      fetchTradesSummary(authToken),
     ]);
   };
 
@@ -826,7 +879,10 @@ export default function AstraTradingDesk() {
       }
       const data = await res.json();
       setPhase1Data(data.result);
-      setSuccessMsg(`Phase 1 Filter Executed in ${data.result.execution_latency_ms}ms: ${data.result.tracked_stocks_count} stocks tracked (open < PDH), ${data.result.disqualified_stocks_count} disqualified.`);
+      const r1 = data.result;
+      setSuccessMsg(
+        `Phase 1 · ${r1.run_mode} · session ${r1.session_date}: ${r1.tracked_stocks_count} of ${r1.total_universe_scanned} stocks opened below their previous-day high.`
+      );
       await fetchDashboardMetrics(token);
       await fetchStrategyStatus(token);
     } catch (err: any) {
@@ -852,7 +908,12 @@ export default function AstraTradingDesk() {
       }
       const data = await res.json();
       setPhase2Data(data.result);
-      setSuccessMsg(`Phase 2 Execution Completed in ${data.result.execution_latency_ms}ms: ${data.result.confirmed_breakouts_count} breakout buy orders executed at 9:15 High, SL at Low, Target 2x Risk.`);
+      const r2 = data.result;
+      setSuccessMsg(
+        `Phase 2 · ${r2.run_mode} · session ${r2.session_date}: ${r2.breakouts_confirmed} setup(s) from ${r2.total_tracked_stocks_evaluated} candidates.` +
+          (r2.run_mode === 'LIVE' ? ' Broker orders placed.' : ' Simulated only — no broker orders sent.')
+      );
+      await fetchTradesSummary(token);
       await fetchDashboardMetrics(token);
       await fetchStrategyOrders(token);
       await fetchStrategyStatus(token);
@@ -879,11 +940,14 @@ export default function AstraTradingDesk() {
         throw new Error(errJson.detail || 'Strategy pipeline execution failed');
       }
       const data = await res.json();
-      if (data.pipeline) {
-        if (data.pipeline.phase_1) setPhase1Data(data.pipeline.phase_1);
-        if (data.pipeline.phase_2) setPhase2Data(data.pipeline.phase_2);
-      }
-      setSuccessMsg(`Full Two-Stage Pipeline Executed in ${data.pipeline?.total_latency_ms ?? 27}ms! Phase 1 Filter -> Phase 2 Orders Placed.`);
+      const p = data.pipeline || {};
+      if (p.phase1_market_open) setPhase1Data(p.phase1_market_open);
+      if (p.phase2_candle_close) setPhase2Data(p.phase2_candle_close);
+      setSuccessMsg(
+        `Full run · ${p.run_mode} · session ${p.session_date}: ${p.phase1_market_open?.tracked_stocks_count ?? 0} tracked, ${p.breakouts_count ?? 0} setup(s).` +
+          (p.run_mode === 'LIVE' ? ' Broker orders placed.' : ' Simulated only — no broker orders sent.')
+      );
+      await fetchTradesSummary(token);
       await fetchDashboardMetrics(token);
       await fetchStrategyOrders(token);
       await fetchStrategyStatus(token);
@@ -1290,132 +1354,80 @@ export default function AstraTradingDesk() {
   if (!userProfile) {
     return (
       <main style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1.5rem', background: '#07090e' }}>
-        <div className="glass-panel animate-fade-in" style={{ width: '100%', maxWidth: '480px', padding: '2.5rem', boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.7)', border: '1px solid rgba(255, 255, 255, 0.1)' }}>
-          {/* Header */}
-          <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
-            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.6rem', padding: '0.4rem 1rem', background: 'rgba(0, 242, 254, 0.08)', borderRadius: '20px', border: '1px solid rgba(0, 242, 254, 0.3)', marginBottom: '1.2rem' }}>
-              <span className="status-dot green animate-pulse-glow" />
-              <span style={{ fontSize: '0.75rem', fontWeight: 600, letterSpacing: '1px', color: 'var(--accent-cyan)' }}>
-                ASTRA ALGO DESK V1
-              </span>
+        <div className="ui-card animate-fade-in" style={{ width: '100%', maxWidth: '400px', padding: '2rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.7rem', marginBottom: '1.6rem' }}>
+            <div style={LOGO_STYLE}>AA</div>
+            <div>
+              <div style={{ fontWeight: 700, color: '#fff', fontSize: '1.05rem' }}>Astra Algo</div>
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>Nifty 50 opening-range breakout desk</div>
             </div>
-            <h1 style={{ fontSize: '1.85rem', fontWeight: 800, letterSpacing: '-0.5px', color: '#fff', marginBottom: '0.4rem' }}>
-              Terminal Authorization
-            </h1>
-            <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-              Role-Based Access Control Protected Trading System
-            </p>
           </div>
+          <h1 style={{ fontSize: '1.3rem', fontWeight: 700, color: '#fff', marginBottom: '1.2rem' }}>Sign in</h1>
 
           {error && (
-            <div id="login-error-alert" style={{ padding: '0.8rem 1rem', background: 'var(--accent-red-bg)', border: '1px solid var(--accent-red)', borderRadius: '8px', color: '#fca5a5', fontSize: '0.85rem', marginBottom: '1.2rem', display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-              <AlertTriangle size={18} />
+            <div id="login-error-alert" className="notice warn" style={{ marginBottom: '1rem' }}>
               <span>{error}</span>
             </div>
           )}
 
-          {/* Form with explicit input only */}
-          <form onSubmit={handleLogin} style={{ display: 'flex', flexDirection: 'column', gap: '1.2rem' }}>
+          <form onSubmit={handleLogin} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
             <div>
-              <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-muted)', marginBottom: '0.4rem' }}>
-                Operator Username ID
-              </label>
-              <input
-                id="input-username"
-                type="text"
-                placeholder="Enter authorized operator ID"
-                value={loginUsername}
-                onChange={(e) => setLoginUsername(e.target.value)}
-                required
-                style={{
-                  width: '100%',
-                  padding: '0.85rem 1rem',
-                  background: 'rgba(10, 13, 20, 0.85)',
-                  border: '1px solid var(--border-subtle)',
-                  borderRadius: '8px',
-                  color: '#fff',
-                  fontSize: '0.95rem',
-                  outline: 'none',
-                }}
-              />
+              <label className="form-label" htmlFor="input-username">Username</label>
+              <input id="input-username" className="form-input" type="text" autoComplete="username" value={loginUsername}
+                onChange={(e) => setLoginUsername(e.target.value)} required />
             </div>
-
             <div>
-              <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-muted)', marginBottom: '0.4rem' }}>
-                Access Password Key
-              </label>
-              <input
-                id="input-password"
-                type="password"
-                placeholder="••••••••••••"
-                value={loginPassword}
-                onChange={(e) => setLoginPassword(e.target.value)}
-                required
-                style={{
-                  width: '100%',
-                  padding: '0.85rem 1rem',
-                  background: 'rgba(10, 13, 20, 0.85)',
-                  border: '1px solid var(--border-subtle)',
-                  borderRadius: '8px',
-                  color: '#fff',
-                  fontSize: '0.95rem',
-                  outline: 'none',
-                }}
-              />
+              <label className="form-label" htmlFor="input-password">Password</label>
+              <input id="input-password" className="form-input" type="password" autoComplete="current-password" value={loginPassword}
+                onChange={(e) => setLoginPassword(e.target.value)} required />
             </div>
-
-            <button
-              id="btn-login"
-              type="submit"
-              disabled={loading}
-              style={{
-                width: '100%',
-                padding: '0.9rem',
-                background: 'linear-gradient(135deg, #00f2fe 0%, #4facfe 100%)',
-                border: 'none',
-                borderRadius: '8px',
-                color: '#030816',
-                fontWeight: 700,
-                fontSize: '0.95rem',
-                cursor: loading ? 'not-allowed' : 'pointer',
-                boxShadow: 'var(--glow-cyan)',
-                transition: 'all 0.2s',
-                marginTop: '0.5rem',
-              }}
-            >
-              {loading ? 'Validating RBAC Credentials...' : 'Sign In to Terminal →'}
+            <button id="btn-login" type="submit" className="btn btn-primary" disabled={loading} style={{ padding: '0.75rem', marginTop: '0.3rem', fontSize: '0.9rem' }}>
+              {loading ? 'Signing in…' : 'Sign in'}
             </button>
           </form>
-
-          {/* Explicit Credentials Reference Card (No 1-Click Login Cheat Buttons) */}
-          <div style={{ marginTop: '2rem', padding: '1rem', background: 'rgba(255, 255, 255, 0.02)', border: '1px solid var(--border-subtle)', borderRadius: '8px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.8rem', color: 'var(--accent-cyan)', fontSize: '0.8rem', fontWeight: 600 }}>
-              <Lock size={15} />
-              <span>Authorized RBAC Operators Reference</span>
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', fontSize: '0.78rem' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.35rem 0', borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
-                <span style={{ color: 'var(--text-muted)' }}>Super Admin:</span>
-                <span className="mono" style={{ color: '#fff' }}><code>superadmin</code> / <code>superadmin123</code></span>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.35rem 0', borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
-                <span style={{ color: 'var(--text-muted)' }}>Admin:</span>
-                <span className="mono" style={{ color: '#fff' }}><code>admin</code> / <code>admin123</code></span>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.35rem 0' }}>
-                <span style={{ color: 'var(--text-muted)' }}>Desk Trader:</span>
-                <span className="mono" style={{ color: '#fff' }}><code>trader1</code> / <code>trader123</code></span>
-              </div>
-            </div>
-            <p style={{ marginTop: '0.75rem', fontSize: '0.7rem', color: 'var(--text-dim)', textAlign: 'center' }}>
-              Strict RBAC Enforced • Enter exact Operator ID and password above
-            </p>
-          </div>
+          <p style={{ marginTop: '1.2rem', fontSize: '0.72rem', color: 'var(--text-dim)' }}>
+            Access is limited to authorised users. Ask an admin to create your account.
+          </p>
         </div>
       </main>
     );
   }
 
+  // Values shared by the header, dashboard and system pages
+  const tradingMode: string = strategyStatusData?.trading_mode || 'paper';
+  const brokerStatus: string | undefined = healthData?.services?.upstox?.status;
+  const brokerOk = brokerStatus === 'CONNECTED';
+  const marketOpen = istMarketOpen();
+  const sessionDate: string | undefined = (phase2Data as any)?.session_date || (phase1Data as any)?.session_date || tradesSummary?.session_date;
+  const setupsCount: number = (phase2Data as any)?.breakouts_confirmed ?? 0;
+  const sessionPnl: number | null = tradesSummary ? (tradesSummary.realized_pnl || 0) + (tradesSummary.unrealized_pnl || 0) : null;
+  const isAdmin = userProfile.role === 'super_admin' || userProfile.role === 'admin';
+  const anyRunBusy = isExecutingPhase1 || isExecutingPhase2 || isExecutingPipeline;
+  const navGroups: { label: string; items: { key: typeof currentNav; label: string; icon: React.ReactNode; onClick?: () => void }[] }[] = [
+    {
+      label: 'Trading',
+      items: [
+        { key: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard size={17} /> },
+        { key: 'charts', label: 'Live Charts', icon: <Activity size={17} /> },
+      ],
+    },
+    {
+      label: 'Strategies',
+      items: [
+        { key: 'strategies', label: `Strategies (${strategies.length})`, icon: <TrendingUp size={17} /> },
+        { key: 'builder', label: 'Strategy Studio', icon: <Sparkles size={17} />, onClick: () => { setStudioMode('create'); setEditingStratKey(null); } },
+        { key: 'runner', label: 'Multi-strategy Runner', icon: <Zap size={17} /> },
+      ],
+    },
+    {
+      label: 'Admin',
+      items: [
+        { key: 'audit', label: 'Alerts Log', icon: <History size={17} /> },
+        ...(isAdmin ? [{ key: 'users' as const, label: 'Users & Roles', icon: <Users size={17} /> }] : []),
+        { key: 'system', label: 'System Status', icon: <Server size={17} /> },
+      ],
+    },
+  ];
   // =========================================================================
   // VIEW 2: LOGGED-IN TERMINAL WITH PERSISTENT SIDEBAR
   // =========================================================================
@@ -1425,276 +1437,73 @@ export default function AstraTradingDesk() {
       <aside
         id="app-sidebar"
         style={{
-          width: '270px',
-          background: 'rgba(12, 16, 26, 0.98)',
-          borderRight: '1px solid var(--border-subtle)',
-          display: 'flex',
-          flexDirection: 'column',
-          justifyContent: 'space-between',
-          position: 'sticky',
-          top: 0,
-          height: '100vh',
-          zIndex: 40,
+          width: '232px', flexShrink: 0, background: 'rgba(12, 16, 26, 0.98)', borderRight: '1px solid var(--border-subtle)',
+          display: 'flex', flexDirection: 'column', justifyContent: 'space-between', position: 'sticky', top: 0, height: '100vh', zIndex: 40,
         }}
       >
-        <div>
-          {/* Brand Header */}
-          <div style={{ padding: '1.4rem 1.2rem', borderBottom: '1px solid var(--border-subtle)' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-              <div
-                style={{
-                  width: '36px',
-                  height: '36px',
-                  borderRadius: '10px',
-                  background: 'linear-gradient(135deg, #00f2fe 0%, #4facfe 100%)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  fontWeight: 900,
-                  color: '#030816',
-                  fontSize: '1rem',
-                  boxShadow: 'var(--glow-cyan)',
-                }}
-              >
-                AA
-              </div>
-              <div>
-                <span style={{ fontWeight: 800, fontSize: '1rem', letterSpacing: '-0.3px', color: '#fff', display: 'block' }}>
-                  ASTRA ALGO
-                </span>
-                <span style={{ fontSize: '0.65rem', color: 'var(--accent-cyan)', fontWeight: 600, letterSpacing: '0.8px' }}>
-                  QUANT TRADING DESK
-                </span>
-              </div>
-            </div>
-
-            {/* Live IST clock chip */}
-            <div
-              className="mono"
-              style={{
-                marginTop: '1rem',
-                fontSize: '0.72rem',
-                color: 'var(--text-muted)',
-                background: 'rgba(255,255,255,0.03)',
-                padding: '0.4rem 0.6rem',
-                borderRadius: '6px',
-                border: '1px solid var(--border-subtle)',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '0.4rem',
-              }}
-            >
-              <Clock size={13} style={{ color: 'var(--accent-cyan)' }} />
-              <span>{currentTime || 'Syncing IST...'}</span>
+        <div style={{ overflowY: 'auto' }}>
+          <div style={{ padding: '1.1rem 1rem', borderBottom: '1px solid var(--border-subtle)', display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+            <div style={LOGO_STYLE}>AA</div>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontWeight: 700, fontSize: '0.95rem', color: '#fff' }}>Astra Algo</div>
+              <div className="mono" style={{ fontSize: '0.66rem', color: 'var(--text-dim)', whiteSpace: 'nowrap' }}><IstClock /></div>
             </div>
           </div>
-
-          {/* Navigation Links */}
-          <nav style={{ padding: '1rem 0.8rem', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-            <button
-              id="nav-dashboard"
-              onClick={() => setCurrentNav('dashboard')}
-              className={`sidebar-link ${currentNav === 'dashboard' ? 'active' : ''}`}
-            >
-              <LayoutDashboard size={18} />
-              <span>Dashboard</span>
-            </button>
-
-            <button
-              id="nav-charts"
-              onClick={() => setCurrentNav('charts')}
-              className={`sidebar-link ${currentNav === 'charts' ? 'active' : ''}`}
-            >
-              <Activity size={18} />
-              <span>Live Charts</span>
-            </button>
-
-            <button
-              id="nav-strategies"
-              onClick={() => setCurrentNav('strategies')}
-              className={`sidebar-link ${currentNav === 'strategies' ? 'active' : ''}`}
-            >
-              <TrendingUp size={18} />
-              <span>Strategies ({strategies.length})</span>
-            </button>
-
-            <button
-              id="nav-builder"
-              onClick={() => {
-                setCurrentNav('builder');
-                setStudioMode('create');
-                setEditingStratKey(null);
-              }}
-              className={`sidebar-link ${currentNav === 'builder' ? 'active' : ''}`}
-            >
-              <Sparkles size={18} style={{ color: 'var(--accent-cyan)' }} />
-              <span>Strategy Studio & AI</span>
-              <span style={{ marginLeft: 'auto', fontSize: '0.62rem', padding: '0.1rem 0.4rem', borderRadius: '4px', background: 'rgba(0,242,254,0.18)', color: 'var(--accent-cyan)', fontWeight: 800, border: '1px solid rgba(0,242,254,0.3)' }}>
-                ADD/EDIT
-              </span>
-            </button>
-
-            <button
-              id="nav-runner"
-              onClick={() => setCurrentNav('runner')}
-              className={`sidebar-link ${currentNav === 'runner' ? 'active' : ''}`}
-            >
-              <Zap size={18} style={{ color: '#facc15' }} />
-              <span>Simultaneous Runner</span>
-              <span style={{ marginLeft: 'auto', fontSize: '0.62rem', padding: '0.1rem 0.4rem', borderRadius: '4px', background: 'rgba(250,204,21,0.15)', color: '#facc15', fontWeight: 800, border: '1px solid rgba(250,204,21,0.3)' }}>
-                {activeExecutionKeys.length > 0 ? `${activeExecutionKeys.length} RUNNING` : 'PARALLEL'}
-              </span>
-            </button>
-
-            <button
-              id="nav-audit"
-              onClick={() => setCurrentNav('audit')}
-              className={`sidebar-link ${currentNav === 'audit' ? 'active' : ''}`}
-            >
-              <History size={18} />
-              <span>Audit Logs</span>
-              {auditLogs.length > 0 && (
-                <span style={{ marginLeft: 'auto', fontSize: '0.68rem', padding: '0.1rem 0.45rem', borderRadius: '10px', background: 'rgba(0,242,254,0.15)', color: 'var(--accent-cyan)' }}>
-                  {auditLogs.length}
-                </span>
-              )}
-            </button>
-
-            {(userProfile.role === 'super_admin' || userProfile.role === 'admin') && (
-              <button
-                id="nav-users"
-                onClick={() => setCurrentNav('users')}
-                className={`sidebar-link ${currentNav === 'users' ? 'active' : ''}`}
-              >
-                <Users size={18} />
-                <span>RBAC Users ({allUsers.length || 3})</span>
-              </button>
-            )}
-
-            <button
-              id="nav-system"
-              onClick={() => setCurrentNav('system')}
-              className={`sidebar-link ${currentNav === 'system' ? 'active' : ''}`}
-            >
-              <Server size={18} />
-              <span>API Status & Health</span>
-            </button>
+          <nav style={{ padding: '0.2rem 0.6rem 1rem', display: 'flex', flexDirection: 'column', gap: '0.15rem' }}>
+            {navGroups.map((group) => (
+              <React.Fragment key={group.label}>
+                <div className="nav-group-label">{group.label}</div>
+                {group.items.map((item) => (
+                  <button
+                    key={item.key}
+                    id={`nav-${item.key}`}
+                    onClick={() => { item.onClick?.(); setCurrentNav(item.key); }}
+                    className={`sidebar-link ${currentNav === item.key ? 'active' : ''}`}
+                  >
+                    {item.icon}
+                    <span>{item.label}</span>
+                  </button>
+                ))}
+              </React.Fragment>
+            ))}
           </nav>
         </div>
 
-        {/* Sidebar Footer: User Info & Logout */}
-        <div style={{ padding: '1.2rem', borderTop: '1px solid var(--border-subtle)', background: 'rgba(0,0,0,0.2)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.8rem' }}>
-            <div>
-              <span id="user-display-name" style={{ fontSize: '0.85rem', fontWeight: 700, color: '#fff', display: 'block' }}>
-                {userProfile.username}
-              </span>
-              <span
-                id="user-role-badge"
-                style={{
-                  fontSize: '0.65rem',
-                  fontWeight: 700,
-                  textTransform: 'uppercase',
-                  padding: '0.15rem 0.4rem',
-                  borderRadius: '4px',
-                  background:
-                    userProfile.role === 'super_admin'
-                      ? 'rgba(0,242,254,0.15)'
-                      : userProfile.role === 'admin'
-                      ? 'rgba(99,102,241,0.15)'
-                      : 'rgba(16,185,129,0.15)',
-                  color:
-                    userProfile.role === 'super_admin'
-                      ? 'var(--accent-cyan)'
-                      : userProfile.role === 'admin'
-                      ? '#a5b4fc'
-                      : '#6ee7b7',
-                }}
-              >
-                {userProfile.role.replace('_', ' ')}
-              </span>
-            </div>
+        <div style={{ padding: '0.9rem 1rem', borderTop: '1px solid var(--border-subtle)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' }}>
+          <div style={{ minWidth: 0 }}>
+            <div id="user-display-name" style={{ fontSize: '0.82rem', fontWeight: 600, color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis' }}>{userProfile.username}</div>
+            <div id="user-role-badge" style={{ fontSize: '0.68rem', color: 'var(--text-dim)', textTransform: 'capitalize' }}>{userProfile.role.replace('_', ' ')}</div>
           </div>
-
-          <button
-            id="btn-logout"
-            onClick={handleLogout}
-            style={{
-              width: '100%',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: '0.5rem',
-              padding: '0.5rem',
-              background: 'rgba(244,63,94,0.08)',
-              border: '1px solid rgba(244,63,94,0.25)',
-              borderRadius: '6px',
-              color: '#fda4af',
-              fontSize: '0.78rem',
-              fontWeight: 600,
-              cursor: 'pointer',
-              transition: 'all 0.15s',
-            }}
-          >
+          <button id="btn-logout" onClick={handleLogout} className="btn" title="Sign out" style={{ padding: '0.4rem 0.6rem' }}>
             <LogOut size={14} />
-            <span>Sign Out Desk</span>
+            <span>Sign out</span>
           </button>
         </div>
       </aside>
 
       {/* ===================== MAIN CONTENT WRAPPER ===================== */}
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-        {/* Top Header Bar */}
         <header
           style={{
-            height: '60px',
-            borderBottom: '1px solid var(--border-subtle)',
-            background: 'rgba(10, 13, 20, 0.8)',
-            backdropFilter: 'blur(10px)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            padding: '0 2rem',
-            position: 'sticky',
-            top: 0,
-            zIndex: 30,
+            minHeight: '60px', borderBottom: '1px solid var(--border-subtle)', background: 'rgba(10, 13, 20, 0.85)', backdropFilter: 'blur(10px)',
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap',
+            padding: '0.6rem 2rem', position: 'sticky', top: 0, zIndex: 30,
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '1.2rem' }}>
-            <h2 style={{ fontSize: '1.1rem', fontWeight: 700, color: '#fff' }}>
-              {currentNav === 'dashboard' && 'Executive Desk Dashboard'}
-              {currentNav === 'charts' && 'Live Charts · Nifty 50 1-Minute with ORB Levels'}
-              {currentNav === 'strategies' && 'Algorithmic Strategies Suite & Comparison'}
-              {currentNav === 'builder' && 'Strategy Studio & AI Quant Synthesizer (Add & Edit)'}
-              {currentNav === 'runner' && 'Multi-Strategy Simultaneous Execution Matrix'}
-              {currentNav === 'audit' && 'Communications & Dispatch Audit Trail'}
-              {currentNav === 'users' && 'Role-Based Access Control (RBAC)'}
-              {currentNav === 'system' && 'Infrastructure & Live API Diagnostics'}
-            </h2>
+          <div>
+            <h2 style={{ fontSize: '1.05rem', fontWeight: 700, color: '#fff' }}>{PAGE_META[currentNav]?.title}</h2>
+            <div style={{ fontSize: '0.74rem', color: 'var(--text-dim)' }}>{PAGE_META[currentNav]?.sub}</div>
           </div>
-
-          {/* Quick Header Indicators */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.8rem' }}>
-            {/* Upstox Status */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.75rem', background: healthData?.services.upstox.healthy ? 'rgba(16,185,129,0.08)' : 'rgba(244,63,94,0.08)', border: `1px solid ${healthData?.services.upstox.healthy ? 'rgba(16,185,129,0.3)' : 'rgba(244,63,94,0.3)'}`, padding: '0.3rem 0.6rem', borderRadius: '6px' }}>
-              <span className={`status-dot ${healthData?.services.upstox.healthy ? 'green' : 'red'}`} />
-              <span>Upstox V2: <b>{healthData?.services.upstox.status || 'CHECKING'}</b></span>
-            </div>
-
-            {/* WhatsApp Status */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.75rem', background: healthData?.services.whatsapp.healthy ? 'rgba(16,185,129,0.08)' : 'rgba(244,63,94,0.08)', border: `1px solid ${healthData?.services.whatsapp.healthy ? 'rgba(16,185,129,0.3)' : 'rgba(244,63,94,0.3)'}`, padding: '0.3rem 0.6rem', borderRadius: '6px' }}>
-              <span className={`status-dot ${healthData?.services.whatsapp.healthy ? 'green' : 'red'}`} />
-              <span>WhatsApp: <b>{healthData?.services.whatsapp.healthy ? 'CONNECTED' : 'DISCONNECTED'}</b></span>
-            </div>
-
-            {/* Telegram Status */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.75rem', background: healthData?.services.telegram.healthy ? 'rgba(16,185,129,0.08)' : 'rgba(244,63,94,0.08)', border: `1px solid ${healthData?.services.telegram.healthy ? 'rgba(16,185,129,0.3)' : 'rgba(244,63,94,0.3)'}`, padding: '0.3rem 0.6rem', borderRadius: '6px' }}>
-              <span className={`status-dot ${healthData?.services.telegram.healthy ? 'green' : 'red'}`} />
-              <span>Telegram: <b>{healthData?.services.telegram.healthy ? 'CONNECTED' : 'DISCONNECTED'}</b></span>
-            </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+            <span className={`chip ${marketOpen ? 'good' : ''}`}>Market {marketOpen ? 'open' : 'closed'}</span>
+            <span className={`chip ${tradingMode === 'live' ? 'bad' : 'warn'}`} title={tradingMode === 'live' ? 'Real orders are sent to Upstox' : 'Trades are simulated; no orders are sent'}>
+              {tradingMode.toUpperCase()} mode
+            </span>
+            <span className={`chip ${brokerOk ? 'good' : 'bad'}`} title="Upstox broker session">
+              Upstox {brokerStatus ? brokerStatus.toLowerCase() : 'checking…'}
+            </span>
           </div>
         </header>
-
         {/* Alerts / Feedback Banner */}
         <div style={{ padding: '1rem 2rem 0 2rem' }}>
           {successMsg && (
@@ -1749,86 +1558,96 @@ export default function AstraTradingDesk() {
               SECTION 1: DASHBOARD
               ========================================================================= */}
           {currentNav === 'dashboard' && (
-            <div className="animate-fade-in">
-              {/* Top Overview Metric Cards */}
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '1.2rem', marginBottom: '1.5rem' }}>
-                {/* Last Call WhatsApp */}
-                <div className="glass-panel card-hover-glow" style={{ padding: '1.2rem' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.6rem' }}>
-                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                      Last WhatsApp Call
-                    </span>
-                    <Smartphone size={16} style={{ color: 'var(--accent-green)' }} />
-                  </div>
-                  <div style={{ fontSize: '0.95rem', fontWeight: 700, color: '#fff', marginBottom: '0.3rem' }}>
-                    {dashMetrics?.last_whatsapp_call.timestamp || 'No dispatches yet'}
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.75rem' }}>
-                    <span style={{ color: 'var(--text-dim)' }}>Recipient: <b>{dashMetrics?.last_whatsapp_call.recipient || '-'}</b></span>
-                    <span style={{ padding: '0.1rem 0.4rem', borderRadius: '4px', background: dashMetrics?.last_whatsapp_call.status === 'SENT' ? 'var(--accent-green-bg)' : 'rgba(255,255,255,0.05)', color: dashMetrics?.last_whatsapp_call.status === 'SENT' ? 'var(--accent-green)' : 'var(--text-dim)' }}>
-                      {dashMetrics?.last_whatsapp_call.status || 'IDLE'}
-                    </span>
-                  </div>
+            <div className="animate-fade-in ui-stack">
+              {/* Broker session warning */}
+              {healthData && !brokerOk && (
+                <div className="notice warn">
+                  <span>
+                    <b>Upstox session {brokerStatus === 'EXPIRED' ? 'expired' : 'not connected'}.</b> Prices are coming from the public
+                    Yahoo feed and no broker orders can be placed until you re-authorise.
+                  </span>
+                  <span style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                    <a className="btn btn-primary" href={`${API_BASE}/auth/login`} target="_blank" rel="noreferrer">Re-authorise Upstox</a>
+                    <button className="btn" onClick={handleSendWhatsAppAuthButton} disabled={loading}>Send link to WhatsApp</button>
+                  </span>
                 </div>
+              )}
 
-                {/* Last Call Telegram */}
-                <div className="glass-panel card-hover-glow" style={{ padding: '1.2rem' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.6rem' }}>
-                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                      Last Telegram Call
-                    </span>
-                    <MessageSquare size={16} style={{ color: 'var(--accent-cyan)' }} />
-                  </div>
-                  <div style={{ fontSize: '0.95rem', fontWeight: 700, color: '#fff', marginBottom: '0.3rem' }}>
-                    {dashMetrics?.last_telegram_call.timestamp || 'No dispatches yet'}
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.75rem' }}>
-                    <span style={{ color: 'var(--text-dim)' }}>Chat ID: <b>{dashMetrics?.last_telegram_call.recipient || '-'}</b></span>
-                    <span style={{ padding: '0.1rem 0.4rem', borderRadius: '4px', background: dashMetrics?.last_telegram_call.status === 'SENT' ? 'rgba(0,242,254,0.15)' : 'rgba(255,255,255,0.05)', color: dashMetrics?.last_telegram_call.status === 'SENT' ? 'var(--accent-cyan)' : 'var(--text-dim)' }}>
-                      {dashMetrics?.last_telegram_call.status || 'IDLE'}
-                    </span>
-                  </div>
+              {/* Key numbers */}
+              <div className="kpi-grid">
+                <div className={`kpi ${marketOpen ? 'good' : ''}`}>
+                  <div className="kpi-label">Market</div>
+                  <div className="kpi-value">{marketOpen ? 'Open' : 'Closed'}</div>
+                  <div className="kpi-sub">NSE 09:15 – 15:30 IST</div>
                 </div>
-
-                {/* Scan Schedule */}
-                <div className="glass-panel card-hover-glow" style={{ padding: '1.2rem' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.6rem' }}>
-                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                      Market Engine Scheduler
-                    </span>
-                    <Radio size={16} style={{ color: 'var(--accent-teal)' }} />
-                  </div>
-                  <div style={{ fontSize: '0.95rem', fontWeight: 700, color: '#fff', marginBottom: '0.3rem' }}>
-                    09:16:00 AM IST (Mon-Fri)
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.75rem' }}>
-                    <span style={{ color: 'var(--text-dim)' }}>Status: <b style={{ color: 'var(--accent-green)' }}>ACTIVE</b></span>
-                    <span style={{ color: 'var(--accent-cyan)' }}>15 Stocks Universe</span>
-                  </div>
+                <div className={`kpi ${tradingMode === 'live' ? 'bad' : 'warn'}`}>
+                  <div className="kpi-label">Trading mode</div>
+                  <div className="kpi-value">{tradingMode.toUpperCase()}</div>
+                  <div className="kpi-sub">{tradingMode === 'live' ? 'Real broker orders' : 'Simulated — no orders sent'}</div>
                 </div>
-
-                {/* Audit Dispatches Total */}
-                <div className="glass-panel card-hover-glow" style={{ padding: '1.2rem' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.6rem' }}>
-                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                      Audit Logged Dispatches
-                    </span>
-                    <History size={16} style={{ color: '#a855f7' }} />
-                  </div>
-                  <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#fff', marginBottom: '0.3rem' }}>
-                    {dashMetrics?.total_audit_logs || auditLogs.length} Records
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.75rem' }}>
-                    <span style={{ color: 'var(--text-dim)' }}>Successful Sent: <b>{dashMetrics?.successful_notifications || 0}</b></span>
-                    <button onClick={() => setCurrentNav('audit')} style={{ background: 'none', border: 'none', color: 'var(--accent-cyan)', cursor: 'pointer', fontSize: '0.72rem' }}>
-                      View Logs →
-                    </button>
-                  </div>
+                <div className="kpi">
+                  <div className="kpi-label">Session</div>
+                  <div className="kpi-value">{sessionDate || '–'}</div>
+                  <div className="kpi-sub">{(phase2Data as any)?.run_mode ? `Last run: ${humanize((phase2Data as any).run_mode)}` : 'Not run yet'}</div>
+                </div>
+                <div className="kpi">
+                  <div className="kpi-label">Opened below PDH</div>
+                  <div className="kpi-value">{phase1Data ? `${phase1Data.tracked_stocks_count} / ${phase1Data.total_universe_scanned}` : '–'}</div>
+                  <div className="kpi-sub">Phase 1 candidates</div>
+                </div>
+                <div className={`kpi ${setupsCount > 0 ? 'good' : ''}`}>
+                  <div className="kpi-label">Setups</div>
+                  <div className="kpi-value">{phase2Data ? setupsCount : '–'}</div>
+                  <div className="kpi-sub">09:15 close above PDH</div>
+                </div>
+                <div className={`kpi ${sessionPnl === null ? '' : sessionPnl > 0 ? 'good' : sessionPnl < 0 ? 'bad' : ''}`}>
+                  <div className="kpi-label">Session P&amp;L</div>
+                  <div className="kpi-value">{sessionPnl === null ? '–' : fmtSigned(sessionPnl)}</div>
+                  <div className="kpi-sub">{tradesSummary ? `W ${tradesSummary.wins} · L ${tradesSummary.losses} · before charges` : 'No trades yet'}</div>
                 </div>
               </div>
 
-              {/* Live market: watchlist + 1-min chart with PDH / 09:15 / entry / SL / target overlays + session trades */}
-              <div id="live-market" style={{ marginBottom: '1.5rem', scrollMarginTop: '1rem' }}>
+              {/* Today's run: rules + manual controls */}
+              <div className="ui-card">
+                <div className="ui-card-head">
+                  <div>
+                    <div className="ui-card-title">Opening-range breakout · today&apos;s run</div>
+                    <div className="ui-card-sub">
+                      Runs automatically at 09:15 (Phase 1) and 09:16 (Phase 2), Mon–Fri. Manual runs after 09:45 are replays:
+                      simulated on real candles, with no orders and no alerts.
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                    <button id="btn-phase1" className="btn" onClick={handleTriggerPhase1} disabled={anyRunBusy}>
+                      {isExecutingPhase1 ? 'Running…' : 'Run Phase 1'}
+                    </button>
+                    <button id="btn-phase2" className="btn" onClick={handleTriggerPhase2} disabled={anyRunBusy}>
+                      {isExecutingPhase2 ? 'Running…' : 'Run Phase 2'}
+                    </button>
+                    <button id="btn-pipeline" className="btn btn-primary" onClick={handleTriggerPipeline} disabled={anyRunBusy}>
+                      <Play size={14} />
+                      {isExecutingPipeline ? 'Running…' : 'Run full scan'}
+                    </button>
+                  </div>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: '0.6rem' }}>
+                  {[
+                    ['Qualify', 'Open < PDH and 09:15 close > PDH'],
+                    ['Entry', 'Buy stop at the 09:15 high'],
+                    ['Stop loss', 'The 09:15 low'],
+                    ['Target', 'Entry + 2 × (high − low)'],
+                    ['Exit', 'Target, stop, or 15:15 square-off'],
+                  ].map(([k, v]) => (
+                    <div key={k} style={{ background: 'rgba(255,255,255,0.025)', border: '1px solid var(--border-subtle)', borderRadius: 8, padding: '0.55rem 0.7rem' }}>
+                      <div className="kpi-label">{k}</div>
+                      <div style={{ fontSize: '0.8rem', color: '#e2e8f0', marginTop: 3 }}>{v}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Live market: watchlist + 1-min chart with strategy levels + session trades */}
+              <div id="live-market" style={{ scrollMarginTop: '1rem' }}>
                 {token && (
                   <LiveMarketPanel
                     apiBase={API_BASE}
@@ -1841,639 +1660,173 @@ export default function AstraTradingDesk() {
                 )}
               </div>
 
-              {/* Live API Health Indicators Panel */}
-              <div className="glass-panel" style={{ padding: '1.4rem', marginBottom: '1.5rem' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                    <Activity size={18} style={{ color: 'var(--accent-cyan)' }} />
-                    <h3 style={{ fontSize: '1.05rem', fontWeight: 700, color: '#fff' }}>
-                      Live API Status & Connectivity Matrix
-                    </h3>
-                  </div>
-                  <button
-                    id="btn-check-api-health"
-                    onClick={() => fetchLiveHealth()}
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '0.4rem',
-                      padding: '0.4rem 0.8rem',
-                      background: 'rgba(255,255,255,0.05)',
-                      border: '1px solid var(--border-subtle)',
-                      borderRadius: '6px',
-                      color: '#fff',
-                      fontSize: '0.75rem',
-                      cursor: 'pointer',
-                    }}
-                  >
-                    <RefreshCw size={13} />
-                    <span>Ping & Verify Connections</span>
-                  </button>
-                </div>
-
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '1rem' }}>
-                  {/* Upstox Card */}
-                  <div style={{ padding: '1rem', borderRadius: '8px', background: 'rgba(0,0,0,0.3)', border: `1px solid ${healthData?.services.upstox.healthy ? 'rgba(16,185,129,0.3)' : 'rgba(244,63,94,0.3)'}` }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-                      <span style={{ fontWeight: 600, fontSize: '0.88rem', color: '#fff' }}>Upstox Broker V2</span>
-                      <span className={`status-dot ${healthData?.services.upstox.healthy ? 'green' : 'red'}`} />
+              {/* Signal details */}
+              <div className="ui-grid-2">
+                <div className="ui-card">
+                  <div className="ui-card-head">
+                    <div>
+                      <div className="ui-card-title">Phase 1 · open vs previous-day high</div>
+                      <div className="ui-card-sub">
+                        {phase1Data ? `Session ${(phase1Data as any).session_date} · ${humanize((phase1Data as any).run_mode)} · click a row to chart it` : 'Not run yet for this session'}
+                      </div>
                     </div>
-                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.4rem' }}>
-                      Status: <b style={{ color: healthData?.services.upstox.healthy ? 'var(--accent-green)' : 'var(--accent-red)' }}>{healthData?.services.upstox.status || 'CHECKING'}</b>
-                    </div>
-                    <div style={{ fontSize: '0.72rem', color: 'var(--text-dim)', display: 'flex', justifyContent: 'space-between' }}>
-                      <span>User: {healthData?.services.upstox.user_id || '4JBX7L'}</span>
-                      <span className="mono">{healthData?.services.upstox.latency_ms || 18}ms</span>
-                    </div>
-                    {!healthData?.services.upstox.healthy && (
-                      <button
-                        onClick={handleSendWhatsAppAuthButton}
-                        style={{
-                          marginTop: '0.6rem',
-                          width: '100%',
-                          padding: '0.35rem',
-                          background: 'rgba(0,242,254,0.1)',
-                          border: '1px solid rgba(0,242,254,0.3)',
-                          borderRadius: '4px',
-                          color: 'var(--accent-cyan)',
-                          fontSize: '0.72rem',
-                          cursor: 'pointer',
-                        }}
-                      >
-                        Send 1-Click WhatsApp Re-Auth →
+                    <div className="seg">
+                      <button className={phase1ActiveTab === 'tracked' ? 'on' : ''} onClick={() => setPhase1ActiveTab('tracked')}>
+                        Tracked ({phase1Data?.tracked_stocks_count ?? 0})
                       </button>
-                    )}
-                  </div>
-
-                  {/* WhatsApp Card */}
-                  <div style={{ padding: '1rem', borderRadius: '8px', background: 'rgba(0,0,0,0.3)', border: `1px solid ${healthData?.services.whatsapp.healthy ? 'rgba(16,185,129,0.3)' : 'rgba(244,63,94,0.3)'}` }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-                      <span style={{ fontWeight: 600, fontSize: '0.88rem', color: '#fff' }}>Meta WhatsApp Cloud API</span>
-                      <span className={`status-dot ${healthData?.services.whatsapp.healthy ? 'green' : 'red'}`} />
-                    </div>
-                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.4rem' }}>
-                      Status: <b style={{ color: healthData?.services.whatsapp.healthy ? 'var(--accent-green)' : 'var(--accent-red)' }}>{healthData?.services.whatsapp.healthy ? 'GREEN (ACTIVE)' : 'DOWN'}</b>
-                    </div>
-                    <div style={{ fontSize: '0.72rem', color: 'var(--text-dim)', display: 'flex', justifyContent: 'space-between' }}>
-                      <span>Phone: +91 82170 99271</span>
-                      <span className="mono">{healthData?.services.whatsapp.latency_ms || 320}ms</span>
+                      <button className={phase1ActiveTab === 'disqualified' ? 'on' : ''} onClick={() => setPhase1ActiveTab('disqualified')}>
+                        Excluded ({phase1Data?.disqualified_stocks_count ?? 0})
+                      </button>
                     </div>
                   </div>
+                  <div className="table-wrap" style={{ maxHeight: 340, overflowY: 'auto' }}>
+                    <table className="data-table">
+                      <thead>
+                        <tr>
+                          <th>Symbol</th>
+                          <th className="num">Open</th>
+                          <th className="num">PDH</th>
+                          <th className="num">Open − PDH</th>
+                          <th>Status</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {((phase1ActiveTab === 'tracked' ? phase1Data?.tracked_stocks : phase1Data?.disqualified_stocks) || []).map((s: any) => (
+                          <tr key={s.symbol} className="clickable" onClick={() => openChart(s.symbol)}>
+                            <td className="sym">{s.symbol}</td>
+                            <td className="num">{fmtNum(s.open_price)}</td>
+                            <td className="num">{fmtNum(s.prev_day_high)}</td>
+                            <td className="num" style={{ color: s.delta_from_pdh == null ? undefined : s.delta_from_pdh < 0 ? 'var(--accent-green)' : 'var(--accent-red)' }}>
+                              {s.delta_from_pdh == null ? '–' : `${s.delta_from_pdh > 0 ? '+' : ''}${fmtNum(s.delta_from_pdh)}`}
+                            </td>
+                            <td>
+                              <span className={`chip ${s.is_eligible ? 'good' : s.status === 'NO_DATA' ? 'warn' : ''}`}>
+                                {s.status === 'OPEN_PENDING' ? 'Open pending' : s.is_eligible ? 'Tracked' : s.status === 'NO_DATA' ? 'No data' : 'Gapped above'}
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                        {!((phase1ActiveTab === 'tracked' ? phase1Data?.tracked_stocks : phase1Data?.disqualified_stocks) || []).length && (
+                          <tr><td colSpan={5} className="empty">{phase1Data ? 'No stocks in this list.' : 'Run Phase 1 to see candidates.'}</td></tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
 
-                  {/* Telegram Card */}
-                  <div style={{ padding: '1rem', borderRadius: '8px', background: 'rgba(0,0,0,0.3)', border: `1px solid ${healthData?.services.telegram.healthy ? 'rgba(16,185,129,0.3)' : 'rgba(244,63,94,0.3)'}` }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-                      <span style={{ fontWeight: 600, fontSize: '0.88rem', color: '#fff' }}>Telegram Desk Bot</span>
-                      <span className={`status-dot ${healthData?.services.telegram.healthy ? 'green' : 'red'}`} />
+                <div className="ui-card">
+                  <div className="ui-card-head">
+                    <div>
+                      <div className="ui-card-title">Phase 2 · 09:15 candle close</div>
+                      <div className="ui-card-sub">
+                        {phase2Data ? `${(phase2Data as any).total_tracked_stocks_evaluated} candidates evaluated · ${setupsCount} setup(s)` : 'Not run yet for this session'}
+                      </div>
                     </div>
-                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.4rem' }}>
-                      Status: <b style={{ color: healthData?.services.telegram.healthy ? 'var(--accent-green)' : 'var(--accent-red)' }}>{healthData?.services.telegram.healthy ? 'CONNECTED' : 'DOWN'}</b>
-                    </div>
-                    <div style={{ fontSize: '0.72rem', color: 'var(--text-dim)', display: 'flex', justifyContent: 'space-between' }}>
-                      <span>Bot: @astra_algobot</span>
-                      <span className="mono">{healthData?.services.telegram.latency_ms || 210}ms</span>
+                    <div className="seg">
+                      <button className={phase2View === 'setups' ? 'on' : ''} onClick={() => setPhase2View('setups')}>Setups</button>
+                      <button className={phase2View === 'all' ? 'on' : ''} onClick={() => setPhase2View('all')}>All evaluated</button>
                     </div>
                   </div>
-
-                  {/* IP Whitelist Guard */}
-                  <div style={{ padding: '1rem', borderRadius: '8px', background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(16,185,129,0.3)' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-                      <span style={{ fontWeight: 600, fontSize: '0.88rem', color: '#fff' }}>Static IP Whitelist Guard</span>
-                      <span className="status-dot green" />
-                    </div>
-                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.4rem' }}>
-                      Status: <b style={{ color: 'var(--accent-green)' }}>ACTIVE (403 Enforced)</b>
-                    </div>
-                    <div style={{ fontSize: '0.72rem', color: 'var(--text-dim)', display: 'flex', justifyContent: 'space-between' }}>
-                      <span>Origin: {healthData?.services.ip_guard.client_ip || '127.0.0.1'}</span>
-                      <span style={{ color: 'var(--accent-cyan)' }}>Protected</span>
-                    </div>
+                  <div className="table-wrap" style={{ maxHeight: 340, overflowY: 'auto' }}>
+                    <table className="data-table">
+                      <thead>
+                        <tr>
+                          <th>Symbol</th>
+                          <th className="num">09:15 O</th>
+                          <th className="num">09:15 C</th>
+                          <th className="num">PDH</th>
+                          <th className="num">Entry</th>
+                          <th className="num">SL</th>
+                          <th className="num">Target</th>
+                          <th>Result</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(phase2View === 'setups'
+                          ? phase2Data?.breakout_stocks || []
+                          : [...(phase2Data?.breakout_stocks || []), ...(phase2Data?.non_breakout_stocks || [])]
+                        ).map((e: any) => (
+                          <tr key={e.symbol} className="clickable" onClick={() => openChart(e.symbol)}>
+                            <td className="sym">{e.symbol}</td>
+                            <td className="num">{fmtNum(e.candle?.open)}</td>
+                            <td className="num">{fmtNum(e.candle?.close)}</td>
+                            <td className="num">{fmtNum(e.prev_day_high)}</td>
+                            <td className="num" style={{ color: 'var(--accent-teal)' }}>{fmtNum(e.entry_order_level)}</td>
+                            <td className="num" style={{ color: 'var(--accent-red)' }}>{fmtNum(e.stop_loss_level)}</td>
+                            <td className="num" style={{ color: 'var(--accent-green)' }}>{fmtNum(e.take_profit_level)}</td>
+                            <td>
+                              {e.setup_detected ? (
+                                <span className={`chip ${toneFor(e.order_execution?.status) || 'good'}`}>
+                                  {e.order_execution ? `${humanize(e.order_execution.status)} · ${e.order_execution.mode}` : 'Setup'}
+                                </span>
+                              ) : (
+                                <span style={{ fontSize: '0.74rem', color: 'var(--text-dim)' }}>{e.reason || 'No setup'}</span>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                        {!(phase2View === 'setups' ? phase2Data?.breakout_stocks?.length : (phase2Data?.breakout_stocks?.length || 0) + (phase2Data?.non_breakout_stocks?.length || 0)) && (
+                          <tr><td colSpan={8} className="empty">{phase2Data ? 'No setups for this session.' : 'Run Phase 2 to evaluate the 09:15 candle.'}</td></tr>
+                        )}
+                      </tbody>
+                    </table>
                   </div>
                 </div>
               </div>
 
-              {/* =========================================================================
-                  TWO-STAGE OPENING RANGE BREAKOUT (ORB) EXECUTION CONTROL BOARD
-                  ========================================================================= */}
-              <div
-                className="glass-panel"
-                style={{
-                  padding: '1.6rem',
-                  marginBottom: '1.5rem',
-                  background: 'linear-gradient(135deg, rgba(0, 242, 254, 0.05) 0%, rgba(16, 185, 129, 0.04) 50%, rgba(10, 13, 20, 0.8) 100%)',
-                  border: '1px solid rgba(0, 242, 254, 0.3)',
-                  boxShadow: '0 8px 32px rgba(0, 0, 0, 0.4), 0 0 20px rgba(0, 242, 254, 0.1)',
-                }}
-              >
-                {/* Header & Speed Latency Telemetry */}
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '1rem', marginBottom: '1.2rem' }}>
+              {/* Order log */}
+              <div className="ui-card">
+                <div className="ui-card-head">
                   <div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.3rem' }}>
-                      <Zap size={22} style={{ color: 'var(--accent-cyan)' }} />
-                      <h3 style={{ fontSize: '1.3rem', fontWeight: 800, color: '#fff', letterSpacing: '-0.3px' }}>
-                        Two-Stage Opening Range Breakout (ORB) Engine
-                      </h3>
-                      <span style={{ fontSize: '0.68rem', padding: '0.2rem 0.6rem', borderRadius: '4px', background: 'rgba(0, 242, 254, 0.15)', color: 'var(--accent-cyan)', fontWeight: 800, border: '1px solid rgba(0, 242, 254, 0.3)' }}>
-                        SUB-50MS INSTITUTIONAL SPEED
-                      </span>
-                    </div>
-                    <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', maxWidth: '780px', lineHeight: '1.5' }}>
-                      Strict two-stage sequential workflow. <b>Phase 1 (09:15 AM)</b> filters equities opening below Previous Day High (PDH). <b>Phase 2 (09:16 AM)</b> evaluates <i>only</i> Phase 1 qualified candidates for 09:15 candle close above PDH, placing instant Buy orders at <b>9:15 High</b> with Stop Loss at <b>9:15 Low</b> and Target at <b>2x (High - Low)</b>.
-                    </p>
+                    <div className="ui-card-title">Order log</div>
+                    <div className="ui-card-sub">Most recent recorded setups across sessions (live, paper and replay)</div>
                   </div>
-
-                  {/* High Speed Telemetry Badges */}
-                  <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-                    <div style={{ padding: '0.4rem 0.8rem', background: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.3)', borderRadius: '6px', fontSize: '0.74rem' }}>
-                      <span style={{ color: 'var(--text-dim)', display: 'block', fontSize: '0.65rem' }}>PIPELINE LATENCY</span>
-                      <span className="mono" style={{ color: 'var(--accent-green)', fontWeight: 800 }}>⚡ ~27.3 ms</span>
-                    </div>
-                    <div style={{ padding: '0.4rem 0.8rem', background: 'rgba(0, 242, 254, 0.1)', border: '1px solid rgba(0, 242, 254, 0.3)', borderRadius: '6px', fontSize: '0.74rem' }}>
-                      <span style={{ color: 'var(--text-dim)', display: 'block', fontSize: '0.65rem' }}>IN-MEMORY PDH CACHE</span>
-                      <span className="mono" style={{ color: 'var(--accent-cyan)', fontWeight: 800 }}>0.001 ms Lookup</span>
-                    </div>
-                    <div style={{ padding: '0.4rem 0.8rem', background: 'rgba(168, 85, 247, 0.1)', border: '1px solid rgba(168, 85, 247, 0.3)', borderRadius: '6px', fontSize: '0.74rem' }}>
-                      <span style={{ color: 'var(--text-dim)', display: 'block', fontSize: '0.65rem' }}>RISK : REWARD</span>
-                      <span className="mono" style={{ color: '#c084fc', fontWeight: 800 }}>Strict 1:2 R:R</span>
-                    </div>
-                  </div>
+                  <span className="chip">{strategyOrders.length} records</span>
                 </div>
-
-                {/* 3 One-Click Action Trigger Buttons */}
-                <div style={{ display: 'flex', gap: '0.8rem', flexWrap: 'wrap', alignItems: 'center', paddingTop: '1rem', borderTop: '1px solid rgba(255, 255, 255, 0.08)' }}>
-                  {/* Button 1: Phase 1 */}
-                  <button
-                    id="btn-trigger-phase1"
-                    onClick={handleTriggerPhase1}
-                    disabled={isExecutingPhase1 || isExecutingPipeline}
-                    style={{
-                      padding: '0.7rem 1.2rem',
-                      background: 'rgba(0, 242, 254, 0.12)',
-                      border: '1px solid var(--accent-cyan)',
-                      borderRadius: '8px',
-                      color: 'var(--accent-cyan)',
-                      fontWeight: 700,
-                      fontSize: '0.85rem',
-                      cursor: isExecutingPhase1 || isExecutingPipeline ? 'not-allowed' : 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '0.5rem',
-                      transition: 'all 0.2s',
-                    }}
-                  >
-                    <Clock size={16} />
-                    <span>{isExecutingPhase1 ? 'Filtering 09:15 AM Open...' : '⚡ Run Phase 1 Filter (09:15 AM: Open < PDH)'}</span>
-                  </button>
-
-                  {/* Button 2: Phase 2 */}
-                  <button
-                    id="btn-trigger-phase2"
-                    onClick={handleTriggerPhase2}
-                    disabled={isExecutingPhase2 || isExecutingPipeline}
-                    style={{
-                      padding: '0.7rem 1.2rem',
-                      background: 'rgba(16, 185, 129, 0.15)',
-                      border: '1px solid var(--accent-green)',
-                      borderRadius: '8px',
-                      color: 'var(--accent-green)',
-                      fontWeight: 700,
-                      fontSize: '0.85rem',
-                      cursor: isExecutingPhase2 || isExecutingPipeline ? 'not-allowed' : 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '0.5rem',
-                      transition: 'all 0.2s',
-                    }}
-                  >
-                    <TrendingUp size={16} />
-                    <span>{isExecutingPhase2 ? 'Evaluating Breakouts & Orders...' : '🚀 Run Phase 2 Breakout (09:16 AM: Close > PDH)'}</span>
-                  </button>
-
-                  {/* Button 3: Full Pipeline */}
-                  <button
-                    id="btn-trigger-pipeline"
-                    onClick={handleTriggerPipeline}
-                    disabled={isExecutingPipeline || isExecutingPhase1 || isExecutingPhase2}
-                    style={{
-                      padding: '0.75rem 1.4rem',
-                      background: 'linear-gradient(135deg, #00f2fe 0%, #4facfe 100%)',
-                      border: 'none',
-                      borderRadius: '8px',
-                      color: '#030816',
-                      fontWeight: 800,
-                      fontSize: '0.88rem',
-                      cursor: isExecutingPipeline || isExecutingPhase1 || isExecutingPhase2 ? 'not-allowed' : 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '0.5rem',
-                      boxShadow: 'var(--glow-cyan)',
-                      marginLeft: 'auto',
-                    }}
-                  >
-                    <Play size={16} fill="#030816" />
-                    <span>{isExecutingPipeline ? 'Executing Full Pipeline...' : '⚡ Execute Full Two-Stage Pipeline'}</span>
-                  </button>
-                </div>
-              </div>
-
-              {/* =========================================================================
-                  STAGE 1 & STAGE 2 DUAL MONITOR CARDS
-                  ========================================================================= */}
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: '1.2rem', marginBottom: '1.5rem' }}>
-                {/* -------------------- PHASE 1 CARD -------------------- */}
-                <div
-                  className="glass-panel"
-                  style={{
-                    padding: '1.4rem',
-                    borderLeft: '4px solid var(--accent-cyan)',
-                  }}
-                >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.8rem' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                      <Clock size={18} style={{ color: 'var(--accent-cyan)' }} />
-                      <h4 style={{ fontSize: '1.05rem', fontWeight: 700, color: '#fff' }}>
-                        Phase 1: Market Open PDH Filter (Nifty 50 Exclusively)
-                      </h4>
-                    </div>
-                    <span style={{ fontSize: '0.7rem', padding: '0.15rem 0.5rem', borderRadius: '4px', background: 'rgba(0, 242, 254, 0.12)', color: 'var(--accent-cyan)', fontWeight: 700 }}>
-                      09:15:00 AM IST (1-Min Chart)
-                    </span>
-                  </div>
-
-                  <div style={{ padding: '0.65rem 0.85rem', background: 'rgba(0, 0, 0, 0.35)', borderRadius: '6px', marginBottom: '0.9rem', border: '1px solid var(--border-subtle)' }}>
-                    <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)', textTransform: 'uppercase', marginBottom: '0.2rem' }}>
-                      Qualifying Rule Condition (At Market Open 9:15 AM):
-                    </div>
-                    <div className="mono" style={{ fontSize: '0.84rem', color: '#fff', fontWeight: 600 }}>
-                      <code>9:15 AM candle must open below Previous Day High (PDH)</code> (<code>open &lt; prev_day_high</code>)
-                    </div>
-                    <div style={{ fontSize: '0.7rem', color: 'var(--accent-cyan)', marginTop: '0.25rem' }}>
-                      Asset Class: <b>Nifty 50 stocks exclusively</b>. Stocks opening ≥ PDH are disqualified.
-                    </div>
-                  </div>
-
-                  {/* Phase 1 Metrics Row */}
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.6rem', marginBottom: '1rem' }}>
-                    <div style={{ padding: '0.6rem', background: 'rgba(255, 255, 255, 0.03)', borderRadius: '6px', textAlign: 'center' }}>
-                      <span style={{ fontSize: '0.65rem', color: 'var(--text-dim)', display: 'block' }}>NIFTY 50 UNIVERSE</span>
-                      <span className="mono" style={{ fontSize: '1.1rem', fontWeight: 800, color: '#fff' }}>
-                        {phase1Data?.total_universe_scanned ?? 50}
-                      </span>
-                    </div>
-                    <div style={{ padding: '0.6rem', background: 'rgba(16, 185, 129, 0.08)', border: '1px solid rgba(16, 185, 129, 0.2)', borderRadius: '6px', textAlign: 'center' }}>
-                      <span style={{ fontSize: '0.65rem', color: 'var(--accent-green)', display: 'block', fontWeight: 700 }}>QUALIFIED (OPEN &lt; PDH)</span>
-                      <span className="mono" style={{ fontSize: '1.1rem', fontWeight: 800, color: 'var(--accent-green)' }}>
-                        {phase1Data?.tracked_stocks_count ?? 38}
-                      </span>
-                    </div>
-                    <div style={{ padding: '0.6rem', background: 'rgba(244, 63, 94, 0.08)', border: '1px solid rgba(244, 63, 94, 0.2)', borderRadius: '6px', textAlign: 'center' }}>
-                      <span style={{ fontSize: '0.65rem', color: '#fca5a5', display: 'block', fontWeight: 700 }}>DISQUALIFIED (≥ PDH)</span>
-                      <span className="mono" style={{ fontSize: '1.1rem', fontWeight: 800, color: '#fca5a5' }}>
-                        {phase1Data?.disqualified_stocks_count ?? 12}
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Interactive Filter Tabs: Tracked vs Disqualified */}
-                  <div style={{ display: 'flex', gap: '0.4rem', marginBottom: '0.8rem' }}>
-                    <button
-                      onClick={() => setPhase1ActiveTab('tracked')}
-                      style={{
-                        padding: '0.35rem 0.7rem',
-                        borderRadius: '4px',
-                        background: phase1ActiveTab === 'tracked' ? 'rgba(16, 185, 129, 0.2)' : 'rgba(255, 255, 255, 0.04)',
-                        border: phase1ActiveTab === 'tracked' ? '1px solid var(--accent-green)' : '1px solid var(--border-subtle)',
-                        color: phase1ActiveTab === 'tracked' ? 'var(--accent-green)' : 'var(--text-muted)',
-                        fontSize: '0.75rem',
-                        fontWeight: 600,
-                        cursor: 'pointer',
-                      }}
-                    >
-                      ✓ Tracked for Phase 2 ({phase1Data?.tracked_stocks_count ?? 38})
-                    </button>
-                    <button
-                      onClick={() => setPhase1ActiveTab('disqualified')}
-                      style={{
-                        padding: '0.35rem 0.7rem',
-                        borderRadius: '4px',
-                        background: phase1ActiveTab === 'disqualified' ? 'rgba(244, 63, 94, 0.2)' : 'rgba(255, 255, 255, 0.04)',
-                        border: phase1ActiveTab === 'disqualified' ? '1px solid #f43f5e' : '1px solid var(--border-subtle)',
-                        color: phase1ActiveTab === 'disqualified' ? '#fca5a5' : 'var(--text-muted)',
-                        fontSize: '0.75rem',
-                        fontWeight: 600,
-                        cursor: 'pointer',
-                      }}
-                    >
-                      ✗ Disqualified (Open ≥ PDH) ({phase1Data?.disqualified_stocks_count ?? 12})
-                    </button>
-                  </div>
-
-                  {/* Stock List Display */}
-                  <div style={{ maxHeight: '220px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.45rem', paddingRight: '0.3rem' }}>
-                    {phase1ActiveTab === 'tracked' ? (
-                      (phase1Data?.tracked_stocks || []).map((stk: any, idx: number) => (
-                        <div
-                          key={idx}
-                          onClick={() => openChart(stk.symbol)}
-                          title="Open in live chart"
-                          style={{
-                            cursor: 'pointer',
-                            display: 'flex',
-                            justifyContent: 'space-between',
-                            alignItems: 'center',
-                            padding: '0.5rem 0.75rem',
-                            background: 'rgba(16, 185, 129, 0.05)',
-                            border: '1px solid rgba(16, 185, 129, 0.2)',
-                            borderRadius: '6px',
-                            fontSize: '0.78rem',
-                          }}
-                        >
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                            <span style={{ fontWeight: 800, color: '#fff' }}>{stk.symbol}</span>
-                            <span style={{ fontSize: '0.68rem', color: 'var(--text-dim)' }}>
-                              Open: <b>₹{stk.open_price ?? stk.open}</b> vs PDH: <b>₹{stk.prev_day_high}</b>
-                            </span>
-                          </div>
-                          <span className="mono" style={{ color: 'var(--accent-green)', fontWeight: 700, fontSize: '0.74rem' }}>
-                            {stk.delta_from_pdh == null ? 'Open pending ⏳' : `-₹${Math.abs(stk.delta_from_pdh).toFixed(2)} Below PDH ✓`}
-                          </span>
-                        </div>
-                      ))
-                    ) : (
-                      (phase1Data?.disqualified_stocks || []).map((stk: any, idx: number) => (
-                        <div
-                          key={idx}
-                          onClick={() => openChart(stk.symbol)}
-                          title="Open in live chart"
-                          style={{
-                            cursor: 'pointer',
-                            display: 'flex',
-                            justifyContent: 'space-between',
-                            alignItems: 'center',
-                            padding: '0.5rem 0.75rem',
-                            background: 'rgba(244, 63, 94, 0.05)',
-                            border: '1px solid rgba(244, 63, 94, 0.2)',
-                            borderRadius: '6px',
-                            fontSize: '0.78rem',
-                          }}
-                        >
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                            <span style={{ fontWeight: 800, color: '#fff' }}>{stk.symbol}</span>
-                            <span style={{ fontSize: '0.68rem', color: 'var(--text-dim)' }}>
-                              Open: <b>₹{stk.open_price ?? stk.open}</b> vs PDH: <b>₹{stk.prev_day_high}</b>
-                            </span>
-                          </div>
-                          <span className="mono" style={{ color: '#fca5a5', fontWeight: 700, fontSize: '0.74rem' }}>
-                            {stk.delta_from_pdh == null ? (stk.reason || 'No data') : `+₹${Math.abs(stk.delta_from_pdh).toFixed(2)} Gapped Above ✗`}
-                          </span>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                </div>
-
-                {/* -------------------- PHASE 2 CARD -------------------- */}
-                <div
-                  className="glass-panel"
-                  style={{
-                    padding: '1.4rem',
-                    borderLeft: '4px solid var(--accent-green)',
-                  }}
-                >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.8rem' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                      <TrendingUp size={18} style={{ color: 'var(--accent-green)' }} />
-                      <h4 style={{ fontSize: '1.05rem', fontWeight: 700, color: '#fff' }}>
-                        Phase 2: 09:15 Candle Close Breakout & Execution
-                      </h4>
-                    </div>
-                    <span style={{ fontSize: '0.7rem', padding: '0.15rem 0.5rem', borderRadius: '4px', background: 'rgba(16, 185, 129, 0.15)', color: 'var(--accent-green)', fontWeight: 700 }}>
-                      09:16:00 AM IST (Close of 09:15 Candle)
-                    </span>
-                  </div>
-
-                  <div style={{ padding: '0.65rem 0.85rem', background: 'rgba(0, 0, 0, 0.35)', borderRadius: '6px', marginBottom: '0.9rem', border: '1px solid var(--border-subtle)' }}>
-                    <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)', textTransform: 'uppercase', marginBottom: '0.2rem' }}>
-                      Qualifying Breakout Condition:
-                    </div>
-                    <div className="mono" style={{ fontSize: '0.84rem', color: '#fff', fontWeight: 600 }}>
-                      <code>9:15 AM candle must close above Previous Day High (PDH)</code> (<code>close &gt; prev_day_high</code>)
-                    </div>
-                    <div style={{ fontSize: '0.7rem', color: 'var(--accent-cyan)', marginTop: '0.3rem' }}>
-                      ⚡ Evaluates <b>ONLY</b> qualifying Nifty 50 stocks from Phase 1 (open &lt; PDH).
-                    </div>
-                  </div>
-
-                  {/* Trade Parameters Callout */}
-                  <div style={{ padding: '0.8rem', background: 'linear-gradient(135deg, rgba(0, 242, 254, 0.08) 0%, rgba(16, 185, 129, 0.08) 100%)', border: '1px solid rgba(0, 242, 254, 0.3)', borderRadius: '8px', marginBottom: '1rem' }}>
-                    <div style={{ fontSize: '0.72rem', fontWeight: 800, color: 'var(--accent-cyan)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '0.5rem' }}>
-                      Exact 1-Min ORB Execution & Target Rules:
-                    </div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', fontSize: '0.78rem' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                        <span style={{ color: 'var(--text-muted)' }}>🎯 Buy Order Entry:</span>
-                        <span className="mono" style={{ color: '#fff', fontWeight: 700 }}>At High of 9:15 AM candle (triggers on break above High)</span>
-                      </div>
-                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                        <span style={{ color: 'var(--text-muted)' }}>🛑 Stop Loss (SL):</span>
-                        <span className="mono" style={{ color: '#fca5a5', fontWeight: 700 }}>At Low of 9:15 AM candle (Capital protected)</span>
-                      </div>
-                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                        <span style={{ color: 'var(--text-muted)' }}>📏 Risk Range (R):</span>
-                        <span className="mono" style={{ color: 'var(--accent-cyan)', fontWeight: 700 }}>"Candle High" - "Candle Low" (Height of 9:15 candle)</span>
-                      </div>
-                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                        <span style={{ color: 'var(--text-muted)' }}>🏆 Profit Target:</span>
-                        <span className="mono" style={{ color: 'var(--accent-green)', fontWeight: 700 }}>Entry + 2×R (1:2 Risk-to-Reward ratio)</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Phase 2 Metrics Row */}
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.6rem' }}>
-                    <div style={{ padding: '0.6rem', background: 'rgba(255, 255, 255, 0.03)', borderRadius: '6px', textAlign: 'center' }}>
-                      <span style={{ fontSize: '0.65rem', color: 'var(--text-dim)', display: 'block' }}>CANDIDATES</span>
-                      <span className="mono" style={{ fontSize: '1.1rem', fontWeight: 800, color: '#fff' }}>
-                        {(phase2Data as any)?.total_tracked_stocks_evaluated ?? phase1Data?.tracked_stocks_count ?? '–'}
-                      </span>
-                    </div>
-                    <div style={{ padding: '0.6rem', background: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.3)', borderRadius: '6px', textAlign: 'center' }}>
-                      <span style={{ fontSize: '0.65rem', color: 'var(--accent-green)', display: 'block', fontWeight: 700 }}>BREAKOUTS</span>
-                      <span className="mono" style={{ fontSize: '1.1rem', fontWeight: 800, color: 'var(--accent-green)' }}>
-                        {(phase2Data as any)?.breakouts_confirmed ?? '–'}
-                      </span>
-                    </div>
-                    <div style={{ padding: '0.6rem', background: 'rgba(0, 242, 254, 0.08)', border: '1px solid rgba(0, 242, 254, 0.2)', borderRadius: '6px', textAlign: 'center' }}>
-                      <span style={{ fontSize: '0.65rem', color: 'var(--accent-cyan)', display: 'block', fontWeight: 700 }}>LATENCY</span>
-                      <span className="mono" style={{ fontSize: '1.1rem', fontWeight: 800, color: 'var(--accent-cyan)' }}>
-                        {phase2Data?.execution_latency_ms != null ? `${phase2Data.execution_latency_ms} ms` : '–'}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* =========================================================================
-                  CONFIRMED BREAKOUT TRADE ORDERS AUDIT TABLE
-                  ========================================================================= */}
-              <div
-                className="glass-panel"
-                style={{
-                  padding: '1.4rem',
-                  marginBottom: '1.5rem',
-                }}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.5rem' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                    <ShieldCheck size={18} style={{ color: 'var(--accent-green)' }} />
-                    <h3 style={{ fontSize: '1.05rem', fontWeight: 700, color: '#fff' }}>
-                      Executed Breakout Orders (Buy at 9:15 High • SL at 9:15 Low • Target 2x Risk)
-                    </h3>
-                  </div>
-                  <span style={{ fontSize: '0.72rem', color: 'var(--text-dim)' }}>
-                    Total Orders Logged: <b>{strategyOrders.length}</b>
-                  </span>
-                </div>
-
-                <div style={{ overflowX: 'auto' }}>
-                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem', textAlign: 'left' }}>
+                <div className="table-wrap">
+                  <table className="data-table">
                     <thead>
-                      <tr style={{ borderBottom: '1px solid var(--border-subtle)', color: 'var(--text-muted)', fontSize: '0.72rem', textTransform: 'uppercase' }}>
-                        <th style={{ padding: '0.6rem' }}>Symbol</th>
-                        <th style={{ padding: '0.6rem' }}>Order ID</th>
-                        <th style={{ padding: '0.6rem' }}>Entry (9:15 High)</th>
-                        <th style={{ padding: '0.6rem' }}>Stop Loss (9:15 Low)</th>
-                        <th style={{ padding: '0.6rem' }}>Target (2x Risk)</th>
-                        <th style={{ padding: '0.6rem' }}>Risk/Share</th>
-                        <th style={{ padding: '0.6rem' }}>R : R</th>
-                        <th style={{ padding: '0.6rem' }}>Status</th>
+                      <tr>
+                        <th>Session</th>
+                        <th>Symbol</th>
+                        <th>Mode</th>
+                        <th className="num">Qty</th>
+                        <th className="num">Entry</th>
+                        <th className="num">SL</th>
+                        <th className="num">Target</th>
+                        <th className="num">Fill</th>
+                        <th className="num">Exit</th>
+                        <th className="num">P&amp;L</th>
+                        <th>Status</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {strategyOrders.length === 0 && (
-                        <tr><td colSpan={8} style={{ padding: '1rem', textAlign: 'center', color: 'var(--text-dim)' }}>No orders recorded yet.</td></tr>
-                      )}
-                      {strategyOrders.slice(0, 12).map((ord: any, idx) => (
-                        <tr key={idx} onClick={() => openChart(ord.symbol)} title="Open in live chart" style={{ borderBottom: '1px solid rgba(255, 255, 255, 0.04)', cursor: 'pointer' }}>
-                          <td style={{ padding: '0.65rem', fontWeight: 800, color: '#fff' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                              <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: 'var(--accent-green)' }}></span>
-                              <span>{ord.symbol}</span>
-                            </div>
+                      {strategyOrders.slice(0, 15).map((o: any, idx) => (
+                        <tr key={o.id ?? idx} className="clickable" onClick={() => openChart(o.symbol)}>
+                          <td className="mono" style={{ color: 'var(--text-muted)' }}>{o.session_date || (o.timestamp || '').slice(0, 10)}</td>
+                          <td className="sym">{o.symbol}</td>
+                          <td><span className={`chip ${toneFor(o.mode)}`}>{o.mode || '–'}</span></td>
+                          <td className="num">{o.quantity ?? '–'}</td>
+                          <td className="num">{fmtNum(o.entry_price)}</td>
+                          <td className="num">{fmtNum(o.stop_loss)}</td>
+                          <td className="num">{fmtNum(o.target_price)}</td>
+                          <td className="num">{fmtNum(o.entry_fill_price)}</td>
+                          <td className="num">{fmtNum(o.exit_price)}</td>
+                          <td className="num" style={{ color: o.pnl == null ? undefined : o.pnl >= 0 ? 'var(--accent-green)' : 'var(--accent-red)' }}>
+                            {o.pnl == null ? '–' : fmtSigned(o.pnl)}
                           </td>
-                          <td style={{ padding: '0.65rem' }}>
-                            <code className="mono" style={{ fontSize: '0.72rem', color: 'var(--accent-cyan)' }}>{ord.order_id}</code>
-                          </td>
-                          <td className="mono" style={{ padding: '0.65rem', fontWeight: 700, color: '#fff' }}>
-                            ₹{Number(ord.entry_price).toFixed(2)}
-                          </td>
-                          <td className="mono" style={{ padding: '0.65rem', fontWeight: 700, color: '#fca5a5' }}>
-                            ₹{Number(ord.stop_loss).toFixed(2)}
-                          </td>
-                          <td className="mono" style={{ padding: '0.65rem', fontWeight: 700, color: 'var(--accent-green)' }}>
-                            ₹{Number(ord.target_price).toFixed(2)}
-                          </td>
-                          <td className="mono" style={{ padding: '0.65rem', color: 'var(--text-muted)' }}>
-                            ₹{Number(ord.risk_per_share).toFixed(2)}
-                          </td>
-                          <td style={{ padding: '0.65rem' }}>
-                            <span style={{ fontSize: '0.72rem', fontWeight: 800, color: '#c084fc', background: 'rgba(168, 85, 247, 0.12)', padding: '0.15rem 0.45rem', borderRadius: '4px' }}>
-                              1:2
-                            </span>
-                          </td>
-                          <td style={{ padding: '0.65rem' }}>
-                            <span style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--accent-green)', background: 'var(--accent-green-bg)', padding: '0.15rem 0.45rem', borderRadius: '4px' }}>
-                              {ord.status}{ord.mode ? ` · ${ord.mode}` : ''}{ord.session_date ? ` · ${ord.session_date}` : ''}
-                            </span>
-                          </td>
+                          <td><span className={`chip ${toneFor(o.status)}`}>{humanize(o.status)}</span></td>
                         </tr>
                       ))}
+                      {strategyOrders.length === 0 && (
+                        <tr><td colSpan={11} className="empty">No orders recorded yet.</td></tr>
+                      )}
                     </tbody>
                   </table>
                 </div>
               </div>
-
-              {/* Live Market Watchlist & Candlestick Metrics Grid */}
-              <div style={{ marginBottom: '1.5rem' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-                  <h3 style={{ fontSize: '1.05rem', fontWeight: 700, color: '#fff' }}>
-                    Live Market Chart & Quotes Snapshot (F&O Leaders)
-                  </h3>
-                  <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>
-                    Auto-refreshing 1-Minute Candle Data
-                  </span>
-                </div>
-
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '1rem' }}>
-                  {(dashMetrics?.stocks_snapshot || []).map((stk, i) => (
-                    <div
-                      key={i}
-                      className="glass-panel card-hover-glow"
-                      style={{
-                        padding: '1.2rem',
-                        borderLeft: stk.breakout ? '4px solid var(--accent-green)' : '4px solid var(--border-subtle)',
-                      }}
-                    >
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.8rem' }}>
-                        <div>
-                          <h4 style={{ fontSize: '1.2rem', fontWeight: 800, color: '#fff' }}>{stk.symbol}</h4>
-                          <span style={{ fontSize: '0.72rem', color: 'var(--text-dim)' }}>
-                            Prev Day High: <b>₹{stk.prev_high}</b>
-                          </span>
-                        </div>
-                        <div style={{ textAlign: 'right' }}>
-                          <span className="mono" style={{ fontSize: '1.2rem', fontWeight: 800, color: '#fff', display: 'block' }}>
-                            ₹{stk.ltp}
-                          </span>
-                          <span
-                            style={{
-                              fontSize: '0.72rem',
-                              fontWeight: 700,
-                              color: stk.change_pct.startsWith('+') ? 'var(--accent-green)' : 'var(--accent-red)',
-                            }}
-                          >
-                            {stk.change_pct}
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* Candle OHLC */}
-                      <div style={{ background: 'rgba(0,0,0,0.3)', borderRadius: '6px', padding: '0.6rem', marginBottom: '0.8rem' }}>
-                        <div style={{ fontSize: '0.68rem', color: 'var(--text-dim)', marginBottom: '0.3rem', textTransform: 'uppercase' }}>
-                          09:15 AM Candle
-                        </div>
-                        <div className="mono" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '0.3rem', fontSize: '0.75rem' }}>
-                          <div><span style={{ color: 'var(--text-dim)' }}>O:</span> ₹{stk.open}</div>
-                          <div><span style={{ color: 'var(--text-dim)' }}>H:</span> ₹{stk.high}</div>
-                          <div><span style={{ color: 'var(--text-dim)' }}>L:</span> ₹{stk.low}</div>
-                          <div><span style={{ color: 'var(--text-dim)' }}>C:</span> ₹{stk.ltp}</div>
-                        </div>
-                      </div>
-
-                      {/* Status */}
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.75rem' }}>
-                        <span style={{ color: 'var(--text-dim)' }}>Trend: <b style={{ color: '#fff' }}>{stk.trend}</b></span>
-                        <span
-                          style={{
-                            padding: '0.2rem 0.5rem',
-                            borderRadius: '12px',
-                            fontSize: '0.7rem',
-                            fontWeight: 700,
-                            background: stk.breakout ? 'var(--accent-green-bg)' : 'rgba(255,255,255,0.04)',
-                            color: stk.breakout ? 'var(--accent-green)' : 'var(--text-dim)',
-                            border: stk.breakout ? '1px solid var(--accent-green)' : '1px solid var(--border-subtle)',
-                          }}
-                        >
-                          {stk.breakout ? '🔥 BREAKOUT ACTIVE' : 'NO BREAKOUT'}
-                        </span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
             </div>
           )}
-
           {/* =========================================================================
               SECTION 2: STRATEGIES PAGE (DROPDOWN + COMPARISON MODE)
               ========================================================================= */}
@@ -2742,16 +2095,16 @@ export default function AstraTradingDesk() {
                                 {s.profit_factor}x
                               </td>
                               <td className="mono" style={{ padding: '0.9rem 0.8rem', color: 'var(--accent-cyan)', fontWeight: 600 }}>
-                                {s.sharpe_ratio ?? 2.45}
+                                {s.sharpe_ratio ?? '–'}
                               </td>
                               <td className="mono" style={{ padding: '0.9rem 0.8rem', color: '#a78bfa', fontWeight: 600 }}>
-                                {s.sortino_ratio ?? 3.12}
+                                {s.sortino_ratio ?? '–'}
                               </td>
                               <td className="mono" style={{ padding: '0.9rem 0.8rem', color: '#f59e0b', fontWeight: 600 }}>
-                                {s.calmar_ratio ?? 4.88}
+                                {s.calmar_ratio ?? '–'}
                               </td>
                               <td className="mono" style={{ padding: '0.9rem 0.8rem', color: 'var(--accent-green)' }}>
-                                ₹{(s.profit_expectancy ?? 3420).toLocaleString('en-IN')}
+                                ₹{(s.profit_expectancy != null ? s.profit_expectancy.toLocaleString('en-IN') : '–')}
                               </td>
                               <td className="mono" style={{ padding: '0.9rem 0.8rem', color: '#fca5a5' }}>
                                 -{s.max_drawdown}%
@@ -2760,7 +2113,7 @@ export default function AstraTradingDesk() {
                                 +{s.avg_return_per_trade}%
                               </td>
                               <td className="mono" style={{ padding: '0.9rem 0.8rem', color: 'var(--text-muted)' }}>
-                                {s.win_loss_ratio ?? 2.1}:1
+                                {s.win_loss_ratio ?? '–'}:1
                               </td>
                               <td className="mono" style={{ padding: '0.9rem 0.8rem', color: '#fff', fontWeight: 700 }}>
                                 {s.best_symbol ?? 'RELIANCE'}
@@ -2858,7 +2211,7 @@ export default function AstraTradingDesk() {
                       </div>
                     </div>
 
-                    {/* Right: Comprehensive Institutional Quant Metrics Cockpit */}
+                    {/* Right: recorded metrics */}
                     <div className="glass-panel" style={{ padding: '1.5rem' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.2rem' }}>
                         <h4 style={{ fontSize: '1rem', fontWeight: 700, color: '#fff' }}>
@@ -2914,11 +2267,11 @@ export default function AstraTradingDesk() {
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.6rem' }}>
                           <div style={{ padding: '0.7rem', background: 'rgba(0,0,0,0.35)', borderRadius: '6px', border: '1px solid rgba(0,242,254,0.15)' }}>
                             <span style={{ fontSize: '0.68rem', color: 'var(--accent-cyan)', display: 'block', fontWeight: 600 }}>Sharpe Ratio</span>
-                            <span className="mono" style={{ fontSize: '1.15rem', fontWeight: 800, color: '#fff' }}>{currentStrategy.sharpe_ratio ?? 2.45}</span>
+                            <span className="mono" style={{ fontSize: '1.15rem', fontWeight: 800, color: '#fff' }}>{currentStrategy.sharpe_ratio ?? '–'}</span>
                           </div>
                           <div style={{ padding: '0.7rem', background: 'rgba(0,0,0,0.35)', borderRadius: '6px', border: '1px solid rgba(167,139,250,0.2)' }}>
                             <span style={{ fontSize: '0.68rem', color: '#c084fc', display: 'block', fontWeight: 600 }}>Sortino Ratio</span>
-                            <span className="mono" style={{ fontSize: '1.15rem', fontWeight: 800, color: '#fff' }}>{currentStrategy.sortino_ratio ?? 3.12}</span>
+                            <span className="mono" style={{ fontSize: '1.15rem', fontWeight: 800, color: '#fff' }}>{currentStrategy.sortino_ratio ?? '–'}</span>
                           </div>
                         </div>
 
@@ -2926,18 +2279,18 @@ export default function AstraTradingDesk() {
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.6rem' }}>
                           <div style={{ padding: '0.7rem', background: 'rgba(0,0,0,0.35)', borderRadius: '6px', border: '1px solid rgba(245,158,11,0.2)' }}>
                             <span style={{ fontSize: '0.68rem', color: '#f59e0b', display: 'block', fontWeight: 600 }}>Calmar Ratio</span>
-                            <span className="mono" style={{ fontSize: '1.15rem', fontWeight: 800, color: '#fff' }}>{currentStrategy.calmar_ratio ?? 4.88}</span>
+                            <span className="mono" style={{ fontSize: '1.15rem', fontWeight: 800, color: '#fff' }}>{currentStrategy.calmar_ratio ?? '–'}</span>
                           </div>
                           <div style={{ padding: '0.7rem', background: 'rgba(0,0,0,0.35)', borderRadius: '6px', border: '1px solid rgba(16,185,129,0.2)' }}>
                             <span style={{ fontSize: '0.68rem', color: 'var(--accent-green)', display: 'block', fontWeight: 600 }}>Profit Expectancy</span>
-                            <span className="mono" style={{ fontSize: '1.05rem', fontWeight: 800, color: '#fff' }}>₹{(currentStrategy.profit_expectancy ?? 3420).toLocaleString('en-IN')}</span>
+                            <span className="mono" style={{ fontSize: '1.05rem', fontWeight: 800, color: '#fff' }}>₹{(currentStrategy.profit_expectancy != null ? currentStrategy.profit_expectancy.toLocaleString('en-IN') : '–')}</span>
                           </div>
                         </div>
 
                         {/* Win/Loss & Avg Return */}
                         <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.6rem 0.8rem', background: 'rgba(255,255,255,0.03)', borderRadius: '6px', fontSize: '0.78rem' }}>
                           <span style={{ color: 'var(--text-muted)' }}>Win / Loss Ratio:</span>
-                          <span className="mono" style={{ color: '#fff', fontWeight: 700 }}>{currentStrategy.win_loss_ratio ?? 2.1} : 1</span>
+                          <span className="mono" style={{ color: '#fff', fontWeight: 700 }}>{currentStrategy.win_loss_ratio ?? '–'} : 1</span>
                         </div>
 
                         <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.6rem 0.8rem', background: 'rgba(255,255,255,0.03)', borderRadius: '6px', fontSize: '0.78rem' }}>
@@ -2949,7 +2302,7 @@ export default function AstraTradingDesk() {
                         <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.6rem 0.8rem', background: 'rgba(255,255,255,0.03)', borderRadius: '6px', fontSize: '0.78rem' }}>
                           <span style={{ color: 'var(--text-muted)' }}>Max Streak (Win / Loss):</span>
                           <span className="mono" style={{ color: '#fff', fontWeight: 700 }}>
-                            <span style={{ color: 'var(--accent-green)' }}>{currentStrategy.max_consecutive_wins ?? 14}W</span> / <span style={{ color: '#fca5a5' }}>{currentStrategy.max_consecutive_losses ?? 3}L</span>
+                            <span style={{ color: 'var(--accent-green)' }}>{currentStrategy.max_consecutive_wins ?? '–'}W</span> / <span style={{ color: '#fca5a5' }}>{currentStrategy.max_consecutive_losses ?? '–'}L</span>
                           </span>
                         </div>
 
@@ -3128,7 +2481,7 @@ export default function AstraTradingDesk() {
                         "1-Min Open Range Breakout (ORB) over Previous Day High",
                         "EMA 9 and 21 Trend Crossover above VWAP",
                         "VWAP Mean Reversion 2-Sigma Oversold Bounce",
-                        "CPR Narrow Pivot Range Institutional Expansion",
+                        "CPR Narrow Pivot Range Range Expansion",
                         "15-Min & 5-Min Multi-Timeframe Supertrend Flip"
                       ].map((presetText) => (
                         <button
@@ -3441,7 +2794,7 @@ export default function AstraTradingDesk() {
                     Active Strategy Inventory ({strategies.length})
                   </h4>
                   <span style={{ fontSize: '0.78rem', color: 'var(--text-dim)' }}>
-                    Core institutional strategies + your custom AI synthesized setups
+                    Core built-in strategies plus your AI-drafted setups
                   </span>
                 </div>
 
@@ -3473,7 +2826,7 @@ export default function AstraTradingDesk() {
                         <div className="mono" style={{ display: 'flex', gap: '0.8rem', fontSize: '0.74rem', marginTop: '0.4rem' }}>
                           <span style={{ color: 'var(--accent-green)' }}>Win Rate: <b>{s.win_rate}%</b></span>
                           <span style={{ color: 'var(--accent-cyan)' }}>Profit Factor: <b>{s.profit_factor}x</b></span>
-                          <span style={{ color: '#a78bfa' }}>Sharpe: <b>{s.sharpe_ratio ?? 2.45}</b></span>
+                          <span style={{ color: '#a78bfa' }}>Sharpe: <b>{s.sharpe_ratio ?? '–'}</b></span>
                         </div>
                       </div>
 
@@ -3697,7 +3050,7 @@ export default function AstraTradingDesk() {
                           </div>
                           <div className="mono">
                             <span style={{ fontSize: '0.65rem', color: 'var(--text-dim)', display: 'block' }}>Sharpe</span>
-                            <span style={{ fontSize: '0.85rem', color: '#a78bfa', fontWeight: 700 }}>{strat.sharpe_ratio ?? 2.45}</span>
+                            <span style={{ fontSize: '0.85rem', color: '#a78bfa', fontWeight: 700 }}>{strat.sharpe_ratio ?? '–'}</span>
                           </div>
                         </div>
                       </div>
@@ -4204,130 +3557,103 @@ export default function AstraTradingDesk() {
           )}
 
           {/* =========================================================================
-              SECTION 5: SYSTEM & API DIAGNOSTICS PAGE
+              SECTION 5: SYSTEM STATUS (real values only; nothing hardcoded)
               ========================================================================= */}
           {currentNav === 'system' && (
-            <div className="animate-fade-in" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: '1.5rem' }}>
-              {/* Upstox Card */}
-              <div className="glass-panel" style={{ padding: '1.5rem' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem' }}>
-                  <span className={`status-dot ${healthData?.services.upstox.healthy ? 'green' : 'red'}`} />
-                  <h3 style={{ fontSize: '1.05rem', fontWeight: 700, color: '#fff' }}>
-                    Upstox Broker V2 Connectivity
-                  </h3>
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.8rem', fontSize: '0.85rem' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '0.5rem' }}>
-                    <span style={{ color: 'var(--text-muted)' }}>Status:</span>
-                    <span style={{ fontWeight: 600, color: healthData?.services.upstox.healthy ? 'var(--accent-green)' : 'var(--accent-red)' }}>
-                      {healthData?.services.upstox.status || 'CHECKING'}
-                    </span>
+            <div className="animate-fade-in ui-stack">
+              <div className="ui-card">
+                <div className="ui-card-head">
+                  <div>
+                    <div className="ui-card-title">Services</div>
+                    <div className="ui-card-sub">
+                      {healthData ? `Overall: ${humanize(healthData.overall_status)} · checked ${healthData.timestamp}` : 'Checking…'}
+                    </div>
                   </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '0.5rem' }}>
-                    <span style={{ color: 'var(--text-muted)' }}>User ID:</span>
-                    <span className="mono" style={{ color: 'var(--accent-cyan)' }}>
-                      {healthData?.services.upstox.user_id || '4JBX7L'}
-                    </span>
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '0.5rem' }}>
-                    <span style={{ color: 'var(--text-muted)' }}>Ping Latency:</span>
-                    <span className="mono" style={{ color: '#fff' }}>{healthData?.services.upstox.latency_ms || 18.2}ms</span>
-                  </div>
-                  <button
-                    onClick={handleSendWhatsAppAuthButton}
-                    style={{
-                      marginTop: '0.5rem',
-                      padding: '0.65rem',
-                      background: 'rgba(0,242,254,0.1)',
-                      border: '1px solid rgba(0,242,254,0.3)',
-                      borderRadius: '6px',
-                      color: 'var(--accent-cyan)',
-                      fontSize: '0.8rem',
-                      fontWeight: 600,
-                      cursor: 'pointer',
-                    }}
-                  >
-                    👉 Send 1-Click WhatsApp Re-Auth Button
+                  <button className="btn" onClick={() => fetchLiveHealth()}>
+                    <RefreshCw size={14} />
+                    Refresh
                   </button>
                 </div>
-              </div>
-
-              {/* WhatsApp Card */}
-              <div className="glass-panel" style={{ padding: '1.5rem' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem' }}>
-                  <span className={`status-dot ${healthData?.services.whatsapp.healthy ? 'green' : 'red'}`} />
-                  <h3 style={{ fontSize: '1.05rem', fontWeight: 700, color: '#fff' }}>
-                    Meta WhatsApp Cloud API
-                  </h3>
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.8rem', fontSize: '0.85rem' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '0.5rem' }}>
-                    <span style={{ color: 'var(--text-muted)' }}>Status:</span>
-                    <span style={{ fontWeight: 600, color: healthData?.services.whatsapp.healthy ? 'var(--accent-green)' : 'var(--accent-red)' }}>
-                      {healthData?.services.whatsapp.status || 'CONNECTED'}
-                    </span>
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '0.5rem' }}>
-                    <span style={{ color: 'var(--text-muted)' }}>Phone ID:</span>
-                    <span className="mono" style={{ color: 'var(--accent-cyan)' }}>1211611855373954</span>
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '0.5rem' }}>
-                    <span style={{ color: 'var(--text-muted)' }}>Target Recipients:</span>
-                    <span className="mono" style={{ color: '#fff' }}>916362612641, 917022463267</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Telegram Card */}
-              <div className="glass-panel" style={{ padding: '1.5rem' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem' }}>
-                  <span className={`status-dot ${healthData?.services.telegram.healthy ? 'green' : 'red'}`} />
-                  <h3 style={{ fontSize: '1.05rem', fontWeight: 700, color: '#fff' }}>
-                    Telegram Bot Connectivity
-                  </h3>
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.8rem', fontSize: '0.85rem' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '0.5rem' }}>
-                    <span style={{ color: 'var(--text-muted)' }}>Bot Username:</span>
-                    <span className="mono" style={{ color: 'var(--accent-cyan)' }}>@astra_algobot</span>
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '0.5rem' }}>
-                    <span style={{ color: 'var(--text-muted)' }}>Chat Groups:</span>
-                    <span className="mono" style={{ color: '#fff' }}>-1004476799286, 1134868501</span>
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '0.5rem' }}>
-                    <span style={{ color: 'var(--text-muted)' }}>Status:</span>
-                    <span style={{ fontWeight: 600, color: 'var(--accent-green)' }}>ACTIVE & LISTENING</span>
-                  </div>
+                <div className="table-wrap">
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th>Service</th>
+                        <th>Status</th>
+                        <th>Detail</th>
+                        <th className="num">Latency</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {healthData ? (
+                        (() => {
+                          const s: any = healthData.services;
+                          const rows: [string, any, string, number | null][] = [
+                            ['Upstox broker', s.upstox?.status, s.upstox?.user_id ? `User ${s.upstox.user_id}` : s.upstox?.detail || '', s.upstox?.latency_ms ?? null],
+                            ['WhatsApp alerts', s.whatsapp?.status, `${s.whatsapp?.recipients_configured ?? 0} recipient(s)${s.whatsapp?.verified_name ? ` · ${s.whatsapp.verified_name}` : ''}`, s.whatsapp?.latency_ms ?? null],
+                            ['Telegram alerts', s.telegram?.status, `${s.telegram?.chat_groups_configured ?? 0} chat(s)${s.telegram?.bot_username ? ` · @${s.telegram.bot_username}` : ''}`, s.telegram?.latency_ms ?? null],
+                            ['Scheduler', s.scheduler?.status, `${s.scheduler?.jobs_count ?? 0} jobs · ${s.scheduler?.timezone ?? ''}`, null],
+                            ['Database', s.database?.status, '', null],
+                            ['IP guard', s.ip_guard?.status, s.ip_guard?.client_ip ? `Your IP ${s.ip_guard.client_ip}` : '', null],
+                          ];
+                          return rows.map(([name, status, detail, lat]) => (
+                            <tr key={name}>
+                              <td className="sym">{name}</td>
+                              <td><span className={`chip ${toneFor(status)}`}>{humanize(status)}</span></td>
+                              <td style={{ color: 'var(--text-muted)' }}>{detail || '–'}</td>
+                              <td className="num">{lat ? `${lat} ms` : '–'}</td>
+                            </tr>
+                          ));
+                        })()
+                      ) : (
+                        <tr><td colSpan={4} className="empty">Checking services…</td></tr>
+                      )}
+                    </tbody>
+                  </table>
                 </div>
               </div>
 
-              {/* IP Whitelist Guard */}
-              <div className="glass-panel" style={{ padding: '1.5rem' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem' }}>
-                  <span className="status-dot green" />
-                  <h3 style={{ fontSize: '1.05rem', fontWeight: 700, color: '#fff' }}>
-                    Static IP Whitelist Guard
-                  </h3>
+              <div className="ui-grid-2">
+                <div className="ui-card">
+                  <div className="ui-card-head">
+                    <div>
+                      <div className="ui-card-title">Broker authorisation</div>
+                      <div className="ui-card-sub">Upstox sessions expire daily. Re-authorise before 09:15 for live data and orders.</div>
+                    </div>
+                    <span className={`chip ${brokerOk ? 'good' : 'bad'}`}>{humanize(brokerStatus || 'checking')}</span>
+                  </div>
+                  <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                    <a className="btn btn-primary" href={`${API_BASE}/auth/login`} target="_blank" rel="noreferrer">Re-authorise Upstox</a>
+                    <button className="btn" onClick={handleSendWhatsAppAuthButton} disabled={loading}>Send link to WhatsApp</button>
+                  </div>
                 </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.8rem', fontSize: '0.85rem' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '0.5rem' }}>
-                    <span style={{ color: 'var(--text-muted)' }}>IP Enforcement:</span>
-                    <span style={{ color: 'var(--accent-green)', fontWeight: 600 }}>ENABLED</span>
+
+                <div className="ui-card">
+                  <div className="ui-card-head">
+                    <div>
+                      <div className="ui-card-title">Last alerts sent</div>
+                      <div className="ui-card-sub">Full history is in the Alerts Log</div>
+                    </div>
+                    <button className="btn" onClick={() => setCurrentNav('audit')}>Open Alerts Log</button>
                   </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '0.5rem' }}>
-                    <span style={{ color: 'var(--text-muted)' }}>Configured Allowed IPs:</span>
-                    <span className="mono" style={{ color: 'var(--accent-cyan)' }}>127.0.0.1, localhost, ::1</span>
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '0.5rem' }}>
-                    <span style={{ color: 'var(--text-muted)' }}>Action on Foreign IP:</span>
-                    <span style={{ color: '#fca5a5', fontWeight: 600 }}>HTTP 403 Forbidden</span>
-                  </div>
+                  <table className="data-table">
+                    <tbody>
+                      {([
+                        ['WhatsApp', dashMetrics?.last_whatsapp_call],
+                        ['Telegram', dashMetrics?.last_telegram_call],
+                      ] as [string, any][]).map(([ch, c]) => (
+                        <tr key={ch}>
+                          <td className="sym">{ch}</td>
+                          <td><span className={`chip ${toneFor(c?.status)}`}>{humanize(c?.status || 'IDLE')}</span></td>
+                          <td className="mono" style={{ color: 'var(--text-muted)' }}>{c?.timestamp || '–'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               </div>
             </div>
           )}
-
         </main>
       </div>
     </div>

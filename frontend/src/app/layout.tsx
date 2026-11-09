@@ -3,8 +3,8 @@ import React from "react";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Alpha Capital | Institutional Algorithmic Trading Terminal",
-  description: "Automated Intraday Opening High Breakout/Reversal Strategy Engine with Upstox Integration and Static IP Guard",
+  title: "Astra Algo · Trading Desk",
+  description: "Nifty 50 opening-range breakout desk with live charts, signals and order tracking",
 };
 
 export default function RootLayout({
