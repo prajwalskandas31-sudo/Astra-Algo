@@ -926,6 +926,7 @@ def get_system_live_health(
         
     client_ip = request.client.host if request.client else "unknown"
 
+    # Unauthenticated endpoint: never include phone numbers, phone IDs or broker user IDs here.
     result_payload = {
         "timestamp": now_ist,
         "overall_status": "OPERATIONAL" if (wa_healthy and tg_healthy) else "DEGRADED",
@@ -935,7 +936,6 @@ def get_system_live_health(
                 "name": "Upstox Broker V2 Gateway",
                 "healthy": upstox_healthy,
                 "status": broker_info.get("status"),
-                "user_id": broker_info.get("user_id"),
                 "latency_ms": broker_lat,
                 "detail": broker_info.get("detail", "Connected" if upstox_healthy else "Token Requires Renewal")
             },
@@ -943,9 +943,7 @@ def get_system_live_health(
                 "name": "Meta WhatsApp Cloud API",
                 "healthy": wa_healthy,
                 "status": "CONNECTED" if wa_healthy else "ERROR",
-                "phone_id": strategy.WHATSAPP_PHONE_ID,
                 "verified_name": wa_detail.get("verified_name", "WhatsApp Desk"),
-                "display_phone": wa_detail.get("display_phone_number"),
                 "quality_rating": wa_detail.get("quality_rating"),
                 "recipients_configured": len(strategy.parse_recipient_list(strategy.WHATSAPP_RECIPIENT_PHONE)),
                 "latency_ms": wa_lat

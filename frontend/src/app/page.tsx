@@ -3589,7 +3589,7 @@ export default function AstraTradingDesk() {
                         (() => {
                           const s: any = healthData.services;
                           const rows: [string, any, string, number | null][] = [
-                            ['Upstox broker', s.upstox?.status, s.upstox?.user_id ? `User ${s.upstox.user_id}` : s.upstox?.detail || '', s.upstox?.latency_ms ?? null],
+                            ['Upstox broker', s.upstox?.status, s.upstox?.detail || '', s.upstox?.latency_ms ?? null],
                             ['WhatsApp alerts', s.whatsapp?.status, `${s.whatsapp?.recipients_configured ?? 0} recipient(s)${s.whatsapp?.verified_name ? ` · ${s.whatsapp.verified_name}` : ''}`, s.whatsapp?.latency_ms ?? null],
                             ['Telegram alerts', s.telegram?.status, `${s.telegram?.chat_groups_configured ?? 0} chat(s)${s.telegram?.bot_username ? ` · @${s.telegram.bot_username}` : ''}`, s.telegram?.latency_ms ?? null],
                             ['Scheduler', s.scheduler?.status, `${s.scheduler?.jobs_count ?? 0} jobs · ${s.scheduler?.timezone ?? ''}`, null],
