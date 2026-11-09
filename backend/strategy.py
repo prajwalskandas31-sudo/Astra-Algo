@@ -292,13 +292,18 @@ def simulate_trade(levels: dict, candles: list, session_date: date, now_ts: int 
     def close(status, price, t):
         res.update(status=status, exit_price=round(price, 2), exit_time=t)
 
+    prev = None
     for b in bars:
         if b["t"] >= t_sq:
             if res["status"] == "OPEN":
-                close("EXITED_EOD", b["o"], b["t"])
+                if prev is not None and b["t"] > t_sq + 60:
+                    close("EXITED_EOD", prev["c"], t_sq)   # data gap over 15:15: last price before square-off
+                else:
+                    close("EXITED_EOD", b["o"], b["t"])
             elif res["status"] == "PENDING_ENTRY":
                 res["status"] = "ENTRY_NOT_TRIGGERED"
             return res
+        prev = b
         if res["status"] == "PENDING_ENTRY":
             if b["h"] >= entry:
                 res.update(status="OPEN", entry_fill_price=round(max(entry, b["o"]), 2), entry_time=b["t"])

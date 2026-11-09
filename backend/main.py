@@ -1,5 +1,7 @@
+import json
 import os
 import re
+import secrets
 import time
 from fastapi import FastAPI, Depends, HTTPException, status, Request
 from fastapi.responses import RedirectResponse, HTMLResponse
@@ -14,9 +16,9 @@ import pytz
 from typing import List, Optional
 
 try:
-    from . import models, schemas, auth, database, security_middleware, strategy, upstox_client, generate_token, market_data
+    from . import models, schemas, auth, database, security_middleware, strategy, upstox_client, generate_token, market_data, backtest
 except ImportError:
-    import models, schemas, auth, database, security_middleware, strategy, upstox_client, generate_token, market_data
+    import models, schemas, auth, database, security_middleware, strategy, upstox_client, generate_token, market_data, backtest
 
 # Create database tables
 models.Base.metadata.create_all(bind=database.engine)
@@ -424,6 +426,10 @@ def get_audit_logs(
     logs = query.order_by(models.NotificationAuditLog.id.desc()).limit(limit).all()
     return logs
 
+def _with_backtest_flag(strat):
+    strat.backtest_supported = bool(backtest.resolve_key(strat.key))
+    return strat
+
 @app.get("/strategies", response_model=List[schemas.StrategyOut])
 def get_strategies(
     db: Session = Depends(database.get_db),
@@ -436,7 +442,7 @@ def get_strategies(
     if not strats:
         startup_event()
         strats = db.query(models.Strategy).order_by(models.Strategy.rank.asc()).all()
-    return strats
+    return [_with_backtest_flag(st) for st in strats]
 
 @app.get("/strategies/{key}", response_model=schemas.StrategyOut)
 def get_strategy_by_key(
@@ -447,7 +453,7 @@ def get_strategy_by_key(
     strat = db.query(models.Strategy).filter(models.Strategy.key == key).first()
     if not strat:
         raise HTTPException(status_code=404, detail="Strategy not found")
-    return strat
+    return _with_backtest_flag(strat)
 
 @app.post("/strategies/compare")
 def compare_strategies(
@@ -465,9 +471,12 @@ def compare_strategies(
     if not strats:
         raise HTTPException(status_code=404, detail="No matching strategies found")
         
-    best_winrate = max(strats, key=lambda s: s.win_rate)
-    best_profit_factor = max(strats, key=lambda s: s.profit_factor)
-    lowest_drawdown = min(strats, key=lambda s: s.max_drawdown)
+    tested = [s for s in strats if s.metrics_source == "backtest" and s.win_rate is not None]
+    if not tested:
+        raise HTTPException(status_code=400, detail="None of these strategies has been backtested yet. Run them in Backtesting first.")
+    best_winrate = max(tested, key=lambda s: s.win_rate or 0)
+    best_profit_factor = max(tested, key=lambda s: s.profit_factor or 0)
+    lowest_drawdown = min(tested, key=lambda s: s.max_drawdown if s.max_drawdown is not None else 1e9)
     
     matrix = []
     for s in strats:
@@ -484,10 +493,11 @@ def compare_strategies(
             "max_drawdown": s.max_drawdown,
             "avg_return_per_trade": s.avg_return_per_trade,
             "risk_reward": s.risk_reward,
-            "score": round((s.win_rate * 0.4) + (s.profit_factor * 20) - (s.max_drawdown * 1.5), 1)
+            "score": (round(((s.win_rate or 0) * 0.4) + ((s.profit_factor or 0) * 20) - ((s.max_drawdown or 0) * 1.5), 1)
+                      if s.metrics_source == "backtest" else None)
         })
         
-    matrix.sort(key=lambda x: x["score"], reverse=True)
+    matrix.sort(key=lambda x: x["score"] if x["score"] is not None else -1e9, reverse=True)
     
     return {
         "compared_count": len(strats),
@@ -518,21 +528,6 @@ def create_strategy(
         entry_rules=strat_in.entry_rules,
         exit_rules=strat_in.exit_rules,
         risk_reward=strat_in.risk_reward,
-        win_rate=strat_in.win_rate,
-        total_checks=120,
-        correct_hits=int(120 * (strat_in.win_rate / 100.0)),
-        false_signals=120 - int(120 * (strat_in.win_rate / 100.0)),
-        profit_factor=strat_in.profit_factor,
-        max_drawdown=strat_in.max_drawdown,
-        avg_return_per_trade=strat_in.avg_return_per_trade,
-        sharpe_ratio=round(strat_in.profit_factor * 0.95, 2),
-        sortino_ratio=round(strat_in.profit_factor * 1.25, 2),
-        calmar_ratio=round(strat_in.win_rate / (strat_in.max_drawdown or 1) * 0.35, 2),
-        profit_expectancy=round(strat_in.avg_return_per_trade * 1400.0, 1),
-        win_loss_ratio=round(strat_in.win_rate / (100.01 - strat_in.win_rate), 2),
-        max_consecutive_wins=8,
-        max_consecutive_losses=3,
-        best_symbol=strat_in.best_symbol or "RELIANCE",
         is_active=True,
         is_enabled_for_execution=True,
         created_by=strat_in.created_by or current_user.username,
@@ -614,14 +609,7 @@ def generate_strategy_with_ai(
                 "- entry_rules: Clear numbered mathematical entry triggers (indicators, thresholds, candle triggers, volume confirmation).\n"
                 "- exit_rules: Clear numbered exit rules (stop-loss formula, take-profit R:R formula, trailing stop, time-based square off).\n"
                 "- risk_reward: Risk to reward ratio (e.g. '1:2.0', '1:2.5')\n"
-                "- win_rate: Historical or modeled win rate percentage as a number between 55.0 and 82.0 (e.g. 71.4)\n"
-                "- profit_factor: Profit factor as a number between 1.8 and 3.2 (e.g. 2.45)\n"
-                "- max_drawdown: Maximum historical drawdown percentage as a number between 3.5 and 9.5 (e.g. 5.8)\n"
-                "- avg_return_per_trade: Average expected return percentage per trade as a number between 1.2 and 3.5 (e.g. 2.15)\n"
-                "- best_symbol: Best performing universe stock (e.g. 'RELIANCE', 'TCS', 'HDFCBANK', 'ICICIBANK', 'INFY')\n"
-                "- sharpe_ratio: Sharpe ratio as a number between 1.7 and 3.1 (e.g. 2.38)\n"
-                "- sortino_ratio: Sortino ratio as a number between 2.2 and 4.2 (e.g. 3.12)\n"
-                "- profit_expectancy: Expected profit in Rupees per ₹1,00,000 deployment as a number (e.g. 4850.0)\n"
+                "Do NOT include any performance statistics (win rate, profit factor, Sharpe, drawdown, etc.); those are measured only by the backtester.\n"
                 "- deduced_reasoning: Detailed reasoning explaining how the AI deduced the indicators, risks, mathematical edges, and recommendations."
             )
             
@@ -678,14 +666,6 @@ def generate_strategy_with_ai(
                             entry_rules=parsed.get("entry_rules", "1. Validated by Gemini AI entry filter."),
                             exit_rules=parsed.get("exit_rules", "1. Stop Loss: 0.5% capital clamp.\n2. Target (1:2 R:R): 1.0% upside target."),
                             risk_reward=parsed.get("risk_reward", "1:2"),
-                            win_rate=wr,
-                            profit_factor=pf,
-                            max_drawdown=mdd,
-                            avg_return_per_trade=avg_ret,
-                            best_symbol=parsed.get("best_symbol", "RELIANCE"),
-                            sharpe_ratio=sharpe,
-                            sortino_ratio=sortino,
-                            profit_expectancy=profit_exp,
                             deduced_reasoning=f"✨ [Synthesized live with Google Gemini 2.5 Flash]\n\n" + parsed.get("deduced_reasoning", "Deductions generated by Gemini AI model.")
                         )
         except Exception as exc:
@@ -772,7 +752,7 @@ def generate_strategy_with_ai(
         f"Analyzed trader description: \"{raw_prompt}\".\n"
         f"• Deduced Primary Style: {category}\n"
         f"• Deduced Timeframe: {tf} with strict mathematical volatility filtering\n"
-        f"• Risk/Reward Ratio: 1:2 calibrated to maximize Sharpe ({sharpe}) and positive profit expectancy (₹{profit_exp}/trade)\n"
+        f"• Risk/Reward Ratio: 1:2. Backtest it once its rules are coded to measure real performance.\n"
         f"• All rules formatted systematically for zero-latency execution on Astra Algo."
     )
 
@@ -785,14 +765,6 @@ def generate_strategy_with_ai(
         entry_rules=entry_logic,
         exit_rules=exit_logic,
         risk_reward="1:2",
-        win_rate=win_rate,
-        profit_factor=profit_factor,
-        max_drawdown=max_dd,
-        avg_return_per_trade=avg_ret,
-        best_symbol=best_sym,
-        sharpe_ratio=sharpe,
-        sortino_ratio=sortino,
-        profit_expectancy=profit_exp,
         deduced_reasoning=reasoning
     )
 
@@ -844,11 +816,17 @@ def run_simultaneous_execution(
 _LIVE_HEALTH_CACHE = {"data": None, "timestamp": 0.0}
 _HEALTH_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="HealthProbe")
 
+@app.get("/health")
+def public_health():
+    """Unauthenticated liveness probe (used by the keep-alive workflow). Reveals nothing else."""
+    return {"status": "ok"}
+
 @app.get("/system/live-health")
 def get_system_live_health(
     request: Request,
     force: bool = False,
-    db: Session = Depends(database.get_db)
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(auth.get_current_active_user),
 ):
     """
     Live real-time connectivity diagnostics for all external and internal services.
@@ -1080,59 +1058,162 @@ def send_reauth_button(request: Request, current_user: models.User = Depends(aut
     )
     return {"status": "SUCCESS", "whatsapp_result": res, "auth_link": auth_link, "recipient": strategy.WHATSAPP_AUTH_PHONE}
 
+# ===========================================================================
+# Account security
+# ===========================================================================
+@app.post("/users/me/password")
+def change_my_password(body: schemas.PasswordChange, db: Session = Depends(database.get_db),
+                       current_user: models.User = Depends(auth.get_current_active_user)):
+    if not auth.verify_password(body.current_password, current_user.hashed_password):
+        raise HTTPException(status_code=400, detail="Current password is incorrect.")
+    pw = body.new_password or ""
+    if len(pw) < 10 or pw.lower() == pw or pw.upper() == pw or not any(ch.isdigit() for ch in pw):
+        raise HTTPException(status_code=400, detail="Use at least 10 characters with upper- and lower-case letters and a number.")
+    if pw in ("superadmin123", "admin123", "trader123"):
+        raise HTTPException(status_code=400, detail="That password is publicly known; choose another.")
+    user = db.query(models.User).filter(models.User.id == current_user.id).first()
+    user.hashed_password = auth.get_password_hash(pw)
+    db.commit()
+    ephemeral = database.SQLALCHEMY_DATABASE_URL.startswith("sqlite") and bool(os.getenv("RENDER"))
+    return {"status": "UPDATED", "persistent": not ephemeral}
+
+
+# ===========================================================================
+# Backtesting
+# ===========================================================================
+def _save_backtest(res: dict, username: str):
+    db = database.SessionLocal()
+    try:
+        m = res["metrics"]
+        run = models.BacktestRun(
+            created_at=datetime.now(pytz.timezone("Asia/Kolkata")).strftime("%Y-%m-%d %H:%M:%S"),
+            created_by=username, strategy_key=res["strategy_key"], strategy_name=res["strategy_name"],
+            period_from=res["period"]["from"], period_to=res["period"]["to"], sessions=res["period"]["sessions"],
+            symbols_tested=res["symbols_tested"], trades=m["trades"], win_rate=m["win_rate"], net_pnl=m["net_pnl"],
+            profit_factor=m["profit_factor"], max_drawdown_pct=m["max_drawdown_pct"], result_json=json.dumps(res),
+        )
+        db.add(run)
+        # A full-universe run becomes the strategy's published metrics.
+        strat = db.query(models.Strategy).filter(models.Strategy.key == res["strategy_key"]).first()
+        if strat and not res["params"].get("symbols") and m["trades"]:
+            vals = {"win_rate": m["win_rate"], "total_checks": m["trades"], "correct_hits": m["wins"],
+                    "false_signals": m["losses"], "profit_factor": m["profit_factor"], "max_drawdown": m["max_drawdown_pct"],
+                    "avg_return_per_trade": m["avg_return_pct"], "sharpe_ratio": m["sharpe"], "sortino_ratio": m["sortino"],
+                    "calmar_ratio": m["calmar"], "profit_expectancy": m["expectancy"], "win_loss_ratio": m["win_loss_ratio"],
+                    "max_consecutive_wins": m["max_consecutive_wins"], "max_consecutive_losses": m["max_consecutive_losses"],
+                    "best_symbol": m["best_symbol"]}
+            for k, v in vals.items():
+                setattr(strat, k, v)
+            strat.metrics_source = "backtest"
+            strat.metrics_updated_at = run.created_at
+            strat.metrics_period = f"{res['period']['from']} to {res['period']['to']} · {res['period']['sessions']} sessions · Nifty 50"
+        db.commit()
+        return run.id
+    finally:
+        db.close()
+
+
+@app.get("/backtest/strategies")
+def backtest_strategies(db: Session = Depends(database.get_db), current_user: models.User = Depends(auth.get_current_active_user)):
+    rows = []
+    for s in db.query(models.Strategy).order_by(models.Strategy.rank).all():
+        k = backtest.resolve_key(s.key)
+        rows.append({"key": s.key, "name": s.name, "timeframe": s.timeframe, "supported": bool(k),
+                     "rules": backtest.STRATEGIES[k]["rules"] if k else None,
+                     "reason": None if k else "Rules are free text; this strategy needs a coded rule set before it can be backtested."})
+    return {"strategies": rows, "defaults": backtest.default_params(), **backtest.max_sessions(),
+            "universe": [u["symbol"] for u in market_data.UNIVERSE]}
+
+
+@app.post("/backtest/run")
+def backtest_run(req: schemas.BacktestRequest, current_user: models.User = Depends(auth.get_current_active_user)):
+    if not backtest.resolve_key(req.strategy_key):
+        raise HTTPException(status_code=400, detail="This strategy has no coded rule set, so it cannot be backtested yet.")
+    if req.capital_per_trade <= 0 or req.starting_capital <= 0 or req.sessions < 1:
+        raise HTTPException(status_code=400, detail="Capital and sessions must be positive.")
+    username = current_user.username
+    job_id = backtest.submit(req.strategy_key, req.dict(), on_done=lambda res: _save_backtest(res, username))
+    return {"job_id": job_id}
+
+
+@app.get("/backtest/jobs/{job_id}")
+def backtest_job(job_id: str, current_user: models.User = Depends(auth.get_current_active_user)):
+    job = backtest.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Backtest job not found (the server may have restarted).")
+    return {k: job.get(k) for k in ("id", "status", "strategy_key", "progress", "total", "error", "result", "run_id")}
+
+
+@app.get("/backtest/runs")
+def backtest_runs(limit: int = 30, db: Session = Depends(database.get_db), current_user: models.User = Depends(auth.get_current_active_user)):
+    runs = db.query(models.BacktestRun).order_by(models.BacktestRun.id.desc()).limit(max(1, min(limit, 200))).all()
+    return [{"id": r.id, "created_at": r.created_at, "created_by": r.created_by, "strategy_key": r.strategy_key,
+             "strategy_name": r.strategy_name, "period_from": r.period_from, "period_to": r.period_to, "sessions": r.sessions,
+             "symbols_tested": r.symbols_tested, "trades": r.trades, "win_rate": r.win_rate, "net_pnl": r.net_pnl,
+             "profit_factor": r.profit_factor, "max_drawdown_pct": r.max_drawdown_pct} for r in runs]
+
+
+@app.get("/backtest/runs/{run_id}")
+def backtest_run_detail(run_id: int, db: Session = Depends(database.get_db), current_user: models.User = Depends(auth.get_current_active_user)):
+    r = db.query(models.BacktestRun).filter(models.BacktestRun.id == run_id).first()
+    if not r:
+        raise HTTPException(status_code=404, detail="Backtest run not found.")
+    return {"id": r.id, "created_at": r.created_at, "created_by": r.created_by, "result": json.loads(r.result_json)}
+
+
+@app.delete("/backtest/runs/{run_id}")
+def backtest_run_delete(run_id: int, db: Session = Depends(database.get_db),
+                        current_user: models.User = Depends(auth.require_role([models.RoleEnum.super_admin, models.RoleEnum.admin]))):
+    r = db.query(models.BacktestRun).filter(models.BacktestRun.id == run_id).first()
+    if not r:
+        raise HTTPException(status_code=404, detail="Backtest run not found.")
+    db.delete(r)
+    db.commit()
+    return {"status": "DELETED"}
+
+
 @app.on_event("startup")
 def startup_event():
     db = database.SessionLocal()
     
-    # Auto-seed standard accounts for RBAC
+    # Accounts. Passwords come from env vars; the old public defaults are only allowed on a local dev machine.
+    is_production = bool(os.getenv("RENDER")) or os.getenv("ENVIRONMENT", "").lower() == "production"
     seed_accounts = [
-        {"username": "superadmin", "password": "superadmin123", "role": models.RoleEnum.super_admin},
-        {"username": "admin", "password": "admin123", "role": models.RoleEnum.admin},
-        {"username": "trader1", "password": "trader123", "role": models.RoleEnum.user},
+        ("superadmin", "SUPERADMIN_PASSWORD", "superadmin123", models.RoleEnum.super_admin),
+        ("admin", "ADMIN_PASSWORD", "admin123", models.RoleEnum.admin),
+        ("trader1", "TRADER_PASSWORD", "trader123", models.RoleEnum.user),
     ]
-    for acc in seed_accounts:
-        user = db.query(models.User).filter(models.User.username == acc["username"]).first()
+    for username, env_name, dev_default, role in seed_accounts:
+        chosen = os.getenv(env_name)
+        if not chosen and is_production:
+            chosen = secrets.token_urlsafe(12)
+            print(f"[startup] SECURITY: {env_name} is not set. One-time password for '{username}' this boot: {chosen}  "
+                  f"(set {env_name} in the Render environment to choose a permanent one)")
+        chosen = chosen or dev_default
+        user = db.query(models.User).filter(models.User.username == username).first()
         if not user:
-            pw = auth.get_password_hash(acc["password"])
-            db.add(models.User(username=acc["username"], hashed_password=pw, role=acc["role"]))
-            
-    # Auto-migrate SQLite schema if new metric columns are missing
-    try:
-        from sqlalchemy import text
-        existing_cols = [row[1] for row in db.execute(text("PRAGMA table_info(strategies)")).fetchall()]
-        col_defs = {
-            "sharpe_ratio": "FLOAT DEFAULT 2.45",
-            "sortino_ratio": "FLOAT DEFAULT 3.12",
-            "calmar_ratio": "FLOAT DEFAULT 4.88",
-            "profit_expectancy": "FLOAT DEFAULT 3420.0",
-            "win_loss_ratio": "FLOAT DEFAULT 2.1",
-            "max_consecutive_wins": "INTEGER DEFAULT 14",
-            "max_consecutive_losses": "INTEGER DEFAULT 3",
-            "best_symbol": "VARCHAR DEFAULT 'RELIANCE'",
-            "is_enabled_for_execution": "BOOLEAN DEFAULT 1",
-            "created_by": "VARCHAR DEFAULT 'system'",
-            "ai_prompt": "TEXT"
-        }
-        for col_name, col_type in col_defs.items():
-            if col_name not in existing_cols:
-                try:
-                    db.execute(text(f"ALTER TABLE strategies ADD COLUMN {col_name} {col_type}"))
-                    db.commit()
-                except Exception as alter_err:
-                    print(f"Schema migration warning for {col_name}: {alter_err}")
-    except Exception as pragma_err:
-        print(f"PRAGMA check warning: {pragma_err}")
+            db.add(models.User(username=username, hashed_password=auth.get_password_hash(chosen), role=role))
+        elif is_production and auth.verify_password(dev_default, user.hashed_password):
+            user.hashed_password = auth.get_password_hash(chosen)  # never leave a public default in production
+    db.commit()
 
-    # Trade-lifecycle columns on order_audit_logs
+    # Additive schema migrations (works on SQLite and Postgres)
     try:
-        from sqlalchemy import text
-        existing_cols = [row[1] for row in db.execute(text("PRAGMA table_info(order_audit_logs)")).fetchall()]
-        for col_name, col_type in models.ORDER_AUDIT_MIGRATIONS.items():
-            if existing_cols and col_name not in existing_cols:
-                db.execute(text(f"ALTER TABLE order_audit_logs ADD COLUMN {col_name} {col_type}"))
-                db.commit()
+        from sqlalchemy import inspect as sa_inspect, text
+        insp = sa_inspect(database.engine)
+        for table, cols in (("strategies", models.STRATEGY_MIGRATIONS), ("order_audit_logs", models.ORDER_AUDIT_MIGRATIONS)):
+            existing_cols = {c["name"] for c in insp.get_columns(table)}
+            for col_name, col_type in cols.items():
+                if existing_cols and col_name not in existing_cols:
+                    try:
+                        db.execute(text(f"ALTER TABLE {table} ADD COLUMN {col_name} {col_type}"))
+                        db.commit()
+                    except Exception as alter_err:
+                        db.rollback()
+                        print(f"Schema migration warning for {table}.{col_name}: {alter_err}")
     except Exception as mig_err:
-        print(f"order_audit_logs migration warning: {mig_err}")
+        db.rollback()
+        print(f"Schema migration warning: {mig_err}")
 
     # Migrate any legacy 'opening_high_breakout' key to 'open_range_breakout'
     try:
@@ -1155,21 +1236,6 @@ def startup_event():
             "entry_rules": "1. Setup & Universe: Nifty 50 stocks exclusively.\n2. Timeframe: 1-minute chart.\n3. Qualifying Condition: At market open (9:15 AM), the 9:15 AM candle must open below Previous Day High (PDH) and close above the PDH (Open < PDH and Close > PDH).\n4. Entry Execution: Place a buy order at the high of the 9:15 AM candle (triggers on a break above the high).",
             "exit_rules": "1. Stop Loss (SL): Set the stop loss at the low of the 9:15 AM candle (Capital protection).\n2. Risk Range (R): Candle High - Candle Low (height of the 9:15 AM candle).\n3. Profit Target: Set target at 2×R above the entry level (Entry + 2*R), achieving a strict 1:2 Risk-to-Reward ratio.\n4. Intraday auto-square off at 15:15 IST.",
             "risk_reward": "1:2",
-            "win_rate": 78.4,
-            "total_checks": 1480,
-            "correct_hits": 1160,
-            "false_signals": 320,
-            "profit_factor": 2.74,
-            "max_drawdown": 4.8,
-            "avg_return_per_trade": 2.35,
-            "sharpe_ratio": 2.45,
-            "sortino_ratio": 3.12,
-            "calmar_ratio": 4.88,
-            "profit_expectancy": 3420.0,
-            "win_loss_ratio": 2.1,
-            "max_consecutive_wins": 14,
-            "max_consecutive_losses": 3,
-            "best_symbol": "RELIANCE",
             "is_active": True,
             "is_enabled_for_execution": True,
             "created_by": "system",
@@ -1184,21 +1250,6 @@ def startup_event():
             "entry_rules": "1. Candle 09:15-09:30 high/low established.\n2. Subsequent 5-min candle breaks and closes above 15-min High.\n3. Relative Volume (RVOL) > 1.5x.",
             "exit_rules": "1. Stop Loss: 15-min range midpoint (50% retracement)\n2. Target: 1.5x range size above breakout entry.",
             "risk_reward": "1:2",
-            "win_rate": 68.2,
-            "total_checks": 1120,
-            "correct_hits": 764,
-            "false_signals": 356,
-            "profit_factor": 2.12,
-            "max_drawdown": 7.2,
-            "avg_return_per_trade": 1.74,
-            "sharpe_ratio": 1.95,
-            "sortino_ratio": 2.40,
-            "calmar_ratio": 3.20,
-            "profit_expectancy": 2450.0,
-            "win_loss_ratio": 1.8,
-            "max_consecutive_wins": 9,
-            "max_consecutive_losses": 4,
-            "best_symbol": "HDFCBANK",
             "is_active": True,
             "is_enabled_for_execution": True,
             "created_by": "system",
@@ -1213,21 +1264,6 @@ def startup_event():
             "entry_rules": "1. 9 Exponential Moving Average crosses above 21 EMA.\n2. Price > Intraday Volume-Weighted Average Price (VWAP).\n3. Trend Strength Indicator (ADX) > 22.",
             "exit_rules": "1. Stop Loss: Swing low of prior 3 candles\n2. Target: Trailing stop loss on 21 EMA or 1:2 risk-reward.",
             "risk_reward": "1:2",
-            "win_rate": 64.8,
-            "total_checks": 1890,
-            "correct_hits": 1225,
-            "false_signals": 665,
-            "profit_factor": 1.95,
-            "max_drawdown": 8.1,
-            "avg_return_per_trade": 1.48,
-            "sharpe_ratio": 1.78,
-            "sortino_ratio": 2.15,
-            "calmar_ratio": 2.85,
-            "profit_expectancy": 1980.0,
-            "win_loss_ratio": 1.6,
-            "max_consecutive_wins": 7,
-            "max_consecutive_losses": 4,
-            "best_symbol": "ICICIBANK",
             "is_active": True,
             "is_enabled_for_execution": True,
             "created_by": "system",
@@ -1242,21 +1278,6 @@ def startup_event():
             "entry_rules": "1. Price reaches 2-sigma lower VWAP deviation band.\n2. RSI(14) oversold (< 30).\n3. Rejection wick on lower shadow > 50% candle size.",
             "exit_rules": "1. Stop Loss: 0.3% below lowest wick\n2. Target: Center VWAP benchmark line.",
             "risk_reward": "1:2.5",
-            "win_rate": 71.3,
-            "total_checks": 1650,
-            "correct_hits": 1176,
-            "false_signals": 474,
-            "profit_factor": 2.38,
-            "max_drawdown": 6.1,
-            "avg_return_per_trade": 1.92,
-            "sharpe_ratio": 2.18,
-            "sortino_ratio": 2.85,
-            "calmar_ratio": 4.10,
-            "profit_expectancy": 2860.0,
-            "win_loss_ratio": 1.9,
-            "max_consecutive_wins": 11,
-            "max_consecutive_losses": 3,
-            "best_symbol": "INFY",
             "is_active": True,
             "is_enabled_for_execution": True,
             "created_by": "system",
@@ -1271,21 +1292,6 @@ def startup_event():
             "entry_rules": "1. Current day CPR width is narrow (< 0.25% of spot price).\n2. First 5-minute candle breaks above Top Central (TC).\n3. Market sentiment aligns with NIFTY 50 direction.",
             "exit_rules": "1. Stop Loss: Below Bottom Central (BC)\n2. Target: Pivot Resistance R1 or R2.",
             "risk_reward": "1:2",
-            "win_rate": 69.5,
-            "total_checks": 980,
-            "correct_hits": 681,
-            "false_signals": 299,
-            "profit_factor": 2.22,
-            "max_drawdown": 6.9,
-            "avg_return_per_trade": 1.81,
-            "sharpe_ratio": 2.05,
-            "sortino_ratio": 2.65,
-            "calmar_ratio": 3.65,
-            "profit_expectancy": 2580.0,
-            "win_loss_ratio": 1.75,
-            "max_consecutive_wins": 8,
-            "max_consecutive_losses": 4,
-            "best_symbol": "TCS",
             "is_active": True,
             "is_enabled_for_execution": True,
             "created_by": "system",
@@ -1300,21 +1306,6 @@ def startup_event():
             "entry_rules": "1. 15-Minute Supertrend is GREEN (Bullish regime).\n2. 5-Minute Supertrend flips from RED to GREEN.\n3. Volume exceeds 20-period moving average.",
             "exit_rules": "1. Stop Loss: Supertrend line value on 5-minute timeframe\n2. Target: Trailing stop on 5-min Supertrend flip.",
             "risk_reward": "1:1.8",
-            "win_rate": 66.7,
-            "total_checks": 1430,
-            "correct_hits": 954,
-            "false_signals": 476,
-            "profit_factor": 2.05,
-            "max_drawdown": 7.8,
-            "avg_return_per_trade": 1.62,
-            "sharpe_ratio": 1.88,
-            "sortino_ratio": 2.30,
-            "calmar_ratio": 3.05,
-            "profit_expectancy": 2150.0,
-            "win_loss_ratio": 1.65,
-            "max_consecutive_wins": 8,
-            "max_consecutive_losses": 4,
-            "best_symbol": "LT",
             "is_active": True,
             "is_enabled_for_execution": True,
             "created_by": "system",
@@ -1328,10 +1319,15 @@ def startup_event():
             strat_obj = models.Strategy(**s_data)
             db.add(strat_obj)
         else:
-            # Update fields
             for k, v in s_data.items():
                 setattr(existing, k, v)
-                
+    db.commit()
+
+    # Metrics are shown only when they came from a real backtest; clear any legacy hard-coded numbers.
+    for strat in db.query(models.Strategy).all():
+        if strat.metrics_source != "backtest":
+            for f in models.METRIC_FIELDS:
+                setattr(strat, f, None)
     db.commit()
     db.close()
 

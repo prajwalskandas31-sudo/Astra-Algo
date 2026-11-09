@@ -13,7 +13,13 @@ from dotenv import load_dotenv
 
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
-SECRET_KEY = os.getenv("SECRET_KEY", "supersecretkey")
+SECRET_KEY = os.getenv("SECRET_KEY")
+if not SECRET_KEY or SECRET_KEY in ("supersecretkey", "changeme", "your_secret_key"):
+    # Never sign tokens with a guessable key. A random per-process key means sign-ins reset on restart,
+    # so set SECRET_KEY in the environment (Render generates one via render.yaml).
+    import secrets as _secrets
+    SECRET_KEY = _secrets.token_urlsafe(48)
+    print("[auth] WARNING: SECRET_KEY missing or a known placeholder; using a random key for this process.")
 ALGORITHM = os.getenv("ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
 

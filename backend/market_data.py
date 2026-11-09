@@ -206,8 +206,13 @@ def yahoo_symbol(symbol: str) -> str:
 
 
 def _yahoo_chart(symbol: str, interval: str, rng: str):
-    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{yahoo_symbol(symbol)}?interval={interval}&range={rng}"
-    resp = _http.get(url, timeout=6)
+    return yahoo_chart_query(yahoo_symbol(symbol), f"interval={interval}&range={rng}")
+
+
+def yahoo_chart_query(ysym: str, query: str, timeout: float = 6):
+    """Raw Yahoo chart call: ysym is already URL-encoded (e.g. RELIANCE.NS, %5ENSEI). Returns (meta, candles)."""
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ysym}?{query}"
+    resp = _http.get(url, timeout=timeout)
     if resp.status_code != 200:
         return None, []
     res = (resp.json().get("chart") or {}).get("result") or []

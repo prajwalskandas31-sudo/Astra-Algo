@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import LiveMarketPanel from '@/components/LiveMarketPanel';
+import BacktestPanel from '@/components/BacktestPanel';
 import {
   LayoutDashboard,
   TrendingUp,
@@ -39,7 +40,9 @@ import {
   Save,
   Zap,
   PlusCircle,
-  Bot
+  Bot,
+  FlaskConical,
+  KeyRound,
 } from 'lucide-react';
 
 const getApiBase = () => {
@@ -74,21 +77,25 @@ interface StrategyItem {
   entry_rules: string;
   exit_rules: string;
   risk_reward: string;
-  win_rate: number;
-  total_checks: number;
-  correct_hits: number;
-  false_signals: number;
-  profit_factor: number;
-  max_drawdown: number;
-  avg_return_per_trade: number;
-  sharpe_ratio?: number;
-  sortino_ratio?: number;
-  calmar_ratio?: number;
-  profit_expectancy?: number;
-  win_loss_ratio?: number;
-  max_consecutive_wins?: number;
-  max_consecutive_losses?: number;
-  best_symbol?: string;
+  win_rate: number | null;
+  total_checks: number | null;
+  correct_hits: number | null;
+  false_signals: number | null;
+  profit_factor: number | null;
+  max_drawdown: number | null;
+  avg_return_per_trade: number | null;
+  sharpe_ratio?: number | null;
+  sortino_ratio?: number | null;
+  calmar_ratio?: number | null;
+  profit_expectancy?: number | null;
+  win_loss_ratio?: number | null;
+  max_consecutive_wins?: number | null;
+  max_consecutive_losses?: number | null;
+  best_symbol?: string | null;
+  metrics_source?: string | null;
+  metrics_updated_at?: string | null;
+  metrics_period?: string | null;
+  backtest_supported?: boolean;
   is_active: boolean;
   is_enabled_for_execution?: boolean;
   created_by?: string;
@@ -96,188 +103,7 @@ interface StrategyItem {
   rank: number;
 }
 
-const DEFAULT_STRATEGIES: StrategyItem[] = [
-  {
-    id: 1,
-    key: "open_range_breakout",
-    name: "1-Minute Open Range Breakout (ORB) Strategy",
-    category: "Opening Range Breakout (ORB)",
-    timeframe: "1-Minute Chart (09:15 AM Opening Candle)",
-    description: "1-Minute Open Range Breakout (ORB) Strategy executing exclusively on the Nifty 50 universe. At market open (09:15 AM), the 09:15 AM 1-minute candle must open below Previous Day High (PDH) and close above PDH. An automated buy order is placed at the high of the 09:15 AM candle (triggers on break above the high), with Stop Loss set at the low of the 09:15 AM candle. Target is calibrated at 2×R above the entry level (Risk Range R = Candle High - Candle Low) for a disciplined 1:2 Risk-to-Reward ratio.",
-    entry_rules: "1. Setup & Universe: Nifty 50 stocks exclusively.\n2. Timeframe: 1-minute chart.\n3. Qualifying Condition: At market open (9:15 AM), the 9:15 AM candle must open below Previous Day High (PDH) and close above the PDH (Open < PDH and Close > PDH).\n4. Entry Order: Place a buy order at the high of the 9:15 AM candle (triggers on a break above the high).",
-    exit_rules: "1. Stop Loss (SL): Set the stop loss at the low of the 9:15 AM candle (Capital protected).\n2. Risk Range (R): Candle High - Candle Low (the height of the 9:15 AM candle).\n3. Profit Target: Set target at 2×R above the entry level (Entry + 2*R) achieving a strict 1:2 Risk-to-Reward ratio.\n4. Intraday auto-square off at 15:15 IST.",
-    risk_reward: "1:2",
-    win_rate: 78.4,
-    total_checks: 1480,
-    correct_hits: 1160,
-    false_signals: 320,
-    profit_factor: 2.74,
-    max_drawdown: 4.8,
-    avg_return_per_trade: 2.35,
-    sharpe_ratio: 2.45,
-    sortino_ratio: 3.12,
-    calmar_ratio: 4.88,
-    profit_expectancy: 3420.0,
-    win_loss_ratio: 2.1,
-    max_consecutive_wins: 14,
-    max_consecutive_losses: 3,
-    best_symbol: "RELIANCE",
-    is_active: true,
-    is_enabled_for_execution: true,
-    created_by: "system",
-    rank: 1
-  },
-  {
-    id: 2,
-    key: "orb_15min",
-    name: "Opening Range Breakout (ORB-15)",
-    category: "Range Breakout",
-    timeframe: "15-Min (09:15 to 09:30 candle evaluated at 09:30 AM)",
-    description: "Classic institutional Opening Range Breakout. Identifies high-liquidity stocks breaking out above the 15-minute high with volume exceeding 1.5x of 20-period average. Best for trending market days with index direction confirmation.",
-    entry_rules: "1. Candle 09:15-09:30 high/low established.\n2. Subsequent 5-min candle breaks and closes above 15-min High.\n3. Relative Volume (RVOL) > 1.5x.",
-    exit_rules: "1. Stop Loss: 15-min range midpoint (50% retracement)\n2. Target: 1.5x range size above breakout entry.",
-    risk_reward: "1:2",
-    win_rate: 68.2,
-    total_checks: 1120,
-    correct_hits: 764,
-    false_signals: 356,
-    profit_factor: 2.12,
-    max_drawdown: 7.2,
-    avg_return_per_trade: 1.74,
-    sharpe_ratio: 1.95,
-    sortino_ratio: 2.40,
-    calmar_ratio: 3.20,
-    profit_expectancy: 2450.0,
-    win_loss_ratio: 1.8,
-    max_consecutive_wins: 9,
-    max_consecutive_losses: 4,
-    best_symbol: "HDFCBANK",
-    is_active: true,
-    is_enabled_for_execution: true,
-    created_by: "system",
-    rank: 2
-  },
-  {
-    id: 3,
-    key: "ema_crossover_9_21",
-    name: "EMA 9/21 Trend Crossover",
-    category: "Trend Following",
-    timeframe: "5-Min Intraday",
-    description: "High-velocity trend-following setup capturing intraday swings. Triggers when the 9 EMA crosses above the 21 EMA while price remains above VWAP and ADX > 22, indicating robust directional strength.",
-    entry_rules: "1. 9 Exponential Moving Average crosses above 21 EMA.\n2. Price > Intraday Volume-Weighted Average Price (VWAP).\n3. Trend Strength Indicator (ADX) > 22.",
-    exit_rules: "1. Stop Loss: Swing low of prior 3 candles\n2. Target: Trailing stop loss on 21 EMA or 1:2 risk-reward.",
-    risk_reward: "1:2",
-    win_rate: 64.8,
-    total_checks: 1890,
-    correct_hits: 1225,
-    false_signals: 665,
-    profit_factor: 1.95,
-    max_drawdown: 8.1,
-    avg_return_per_trade: 1.48,
-    sharpe_ratio: 1.78,
-    sortino_ratio: 2.15,
-    calmar_ratio: 2.85,
-    profit_expectancy: 1980.0,
-    win_loss_ratio: 1.6,
-    max_consecutive_wins: 7,
-    max_consecutive_losses: 4,
-    best_symbol: "ICICIBANK",
-    is_active: true,
-    is_enabled_for_execution: true,
-    created_by: "system",
-    rank: 3
-  },
-  {
-    id: 4,
-    key: "vwap_mean_reversion",
-    name: "VWAP Mean Reversion & Bounce",
-    category: "Mean Reversion",
-    timeframe: "3-Min Intraday",
-    description: "Counter-trend reversal strategy designed for range-bound sideways market regimes. Identifies extreme exhaustion where price deviates 2 standard deviations below VWAP and prints a bullish rejection candle targeting mean return to VWAP.",
-    entry_rules: "1. Price reaches 2-sigma lower VWAP deviation band.\n2. RSI(14) oversold (< 30).\n3. Rejection wick on lower shadow > 50% candle size.",
-    exit_rules: "1. Stop Loss: 0.3% below lowest wick\n2. Target: Center VWAP benchmark line.",
-    risk_reward: "1:2.5",
-    win_rate: 71.3,
-    total_checks: 1650,
-    correct_hits: 1176,
-    false_signals: 474,
-    profit_factor: 2.38,
-    max_drawdown: 6.1,
-    avg_return_per_trade: 1.92,
-    sharpe_ratio: 2.18,
-    sortino_ratio: 2.85,
-    calmar_ratio: 4.10,
-    profit_expectancy: 2860.0,
-    win_loss_ratio: 1.9,
-    max_consecutive_wins: 11,
-    max_consecutive_losses: 3,
-    best_symbol: "INFY",
-    is_active: true,
-    is_enabled_for_execution: true,
-    created_by: "system",
-    rank: 4
-  },
-  {
-    id: 5,
-    key: "cpr_directional",
-    name: "Central Pivot Range (CPR) Breakout",
-    category: "Support / Resistance Pivot",
-    timeframe: "5-Min Intraday",
-    description: "Utilizes Central Pivot Range (Top Central TC, Pivot Point P, Bottom Central BC). On Virgin CPR and Narrow CPR days, strong institutional directional expansion occurs. Triggers Long when candle closes above TC with candle volume expansion.",
-    entry_rules: "1. Current day CPR width is narrow (< 0.25% of spot price).\n2. First 5-minute candle breaks above Top Central (TC).\n3. Market sentiment aligns with NIFTY 50 direction.",
-    exit_rules: "1. Stop Loss: Below Bottom Central (BC)\n2. Target: Pivot Resistance R1 or R2.",
-    risk_reward: "1:2",
-    win_rate: 69.5,
-    total_checks: 980,
-    correct_hits: 681,
-    false_signals: 299,
-    profit_factor: 2.22,
-    max_drawdown: 6.9,
-    avg_return_per_trade: 1.81,
-    sharpe_ratio: 2.05,
-    sortino_ratio: 2.65,
-    calmar_ratio: 3.65,
-    profit_expectancy: 2580.0,
-    win_loss_ratio: 1.75,
-    max_consecutive_wins: 8,
-    max_consecutive_losses: 4,
-    best_symbol: "TCS",
-    is_active: true,
-    is_enabled_for_execution: true,
-    created_by: "system",
-    rank: 5
-  },
-  {
-    id: 6,
-    key: "supertrend_mtf",
-    name: "Supertrend Multi-Timeframe Matrix",
-    category: "Multi-Timeframe Trend",
-    timeframe: "15-Min & 5-Min Dual Alignment",
-    description: "Multi-timeframe confirmation engine eliminating false chop. Evaluates 15-minute Supertrend (10, 2) for macro trend direction, and triggers precise execution on 5-minute Supertrend (7, 3) flips with strict stop loss adherence.",
-    entry_rules: "1. 15-Minute Supertrend is GREEN (Bullish regime).\n2. 5-Minute Supertrend flips from RED to GREEN.\n3. Volume exceeds 20-period moving average.",
-    exit_rules: "1. Stop Loss: Supertrend line value on 5-minute timeframe\n2. Target: Trailing stop on 5-min Supertrend flip.",
-    risk_reward: "1:1.8",
-    win_rate: 66.7,
-    total_checks: 1430,
-    correct_hits: 954,
-    false_signals: 476,
-    profit_factor: 2.05,
-    max_drawdown: 7.8,
-    avg_return_per_trade: 1.62,
-    sharpe_ratio: 1.88,
-    sortino_ratio: 2.30,
-    calmar_ratio: 3.05,
-    profit_expectancy: 2150.0,
-    win_loss_ratio: 1.65,
-    max_consecutive_wins: 8,
-    max_consecutive_losses: 4,
-    best_symbol: "LT",
-    is_active: true,
-    is_enabled_for_execution: true,
-    created_by: "system",
-    rank: 6
-  }
-];
+const DEFAULT_STRATEGIES: StrategyItem[] = [];
 
 interface AuditLogItem {
   id: number;
@@ -533,6 +359,8 @@ const PAGE_META: Record<string, { title: string; sub: string }> = {
   strategies: { title: 'Strategies', sub: 'Rules and recorded metrics' },
   builder: { title: 'Strategy Studio', sub: 'Draft and edit strategy definitions' },
   runner: { title: 'Multi-strategy Runner', sub: 'Run selected strategies together' },
+  backtest: { title: 'Backtesting', sub: 'Test any coded strategy on real historical 1-minute data' },
+  account: { title: 'My Account', sub: 'Your sign-in details' },
   audit: { title: 'Alerts Log', sub: 'Every WhatsApp and Telegram message sent' },
   users: { title: 'Users & Roles', sub: 'Who can access the desk' },
   system: { title: 'System Status', sub: 'Broker, alerts and scheduler health' },
@@ -540,7 +368,7 @@ const PAGE_META: Record<string, { title: string; sub: string }> = {
 
 export default function AstraTradingDesk() {
   // Navigation & session state
-  const [currentNav, setCurrentNav] = useState<'dashboard' | 'charts' | 'strategies' | 'builder' | 'runner' | 'audit' | 'users' | 'system'>('dashboard');
+  const [currentNav, setCurrentNav] = useState<'dashboard' | 'charts' | 'strategies' | 'builder' | 'runner' | 'backtest' | 'audit' | 'users' | 'system' | 'account'>('dashboard');
   const [token, setToken] = useState<string | null>(null);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [error, setError] = useState('');
@@ -588,15 +416,6 @@ export default function AstraTradingDesk() {
     entry_rules: '',
     exit_rules: '',
     risk_reward: '1:2',
-    win_rate: 76.5,
-    profit_factor: 2.55,
-    max_drawdown: 5.1,
-    avg_return_per_trade: 2.15,
-    best_symbol: 'RELIANCE',
-    sharpe_ratio: 2.35,
-    sortino_ratio: 3.05,
-    calmar_ratio: 4.20,
-    profit_expectancy: 3150.0,
   });
 
   // Multi-Strategy Simultaneous Execution Matrix
@@ -617,6 +436,13 @@ export default function AstraTradingDesk() {
   const [newUsername, setNewUsername] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [newRole, setNewRole] = useState<'user' | 'admin'>('user');
+
+  // Backtesting deep link (Strategies page -> Backtesting) and password change
+  const [backtestKey, setBacktestKey] = useState<string | null>(null);
+  const openBacktest = (key: string) => { setBacktestKey(key); setCurrentNav('backtest'); };
+  const [pwForm, setPwForm] = useState({ current: '', next: '', confirm: '' });
+  const [pwBusy, setPwBusy] = useState(false);
+  const [pwMsg, setPwMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
   // Session trades summary (P&L) for the dashboard KPIs
   const [tradesSummary, setTradesSummary] = useState<any | null>(null);
@@ -665,7 +491,7 @@ export default function AstraTradingDesk() {
     if (token) {
       fetchAllData(token);
       const pollTimer = setInterval(() => {
-        fetchLiveHealth();
+        fetchLiveHealth(token);
         fetchDashboardMetrics(token);
         fetchStrategyStatus(token);
         fetchStrategyOrders(token);
@@ -678,7 +504,7 @@ export default function AstraTradingDesk() {
   const fetchAllData = async (authToken: string) => {
     await Promise.all([
       fetchProfile(authToken),
-      fetchLiveHealth(),
+      fetchLiveHealth(authToken),
       fetchDashboardMetrics(authToken),
       fetchStrategies(authToken),
       fetchAuditLogs(authToken),
@@ -746,9 +572,11 @@ export default function AstraTradingDesk() {
     }
   };
 
-  const fetchLiveHealth = async () => {
+  const fetchLiveHealth = async (authToken?: string) => {
+    const t = authToken || token;
+    if (!t) return;
     try {
-      const res = await fetch(`${API_BASE}/system/live-health`);
+      const res = await fetch(`${API_BASE}/system/live-health`, { headers: { Authorization: `Bearer ${t}` } });
       if (res.ok) {
         setHealthData(await res.json());
       }
@@ -1153,15 +981,6 @@ export default function AstraTradingDesk() {
         entry_rules: aiData.entry_rules,
         exit_rules: aiData.exit_rules,
         risk_reward: aiData.risk_reward,
-        win_rate: aiData.win_rate,
-        profit_factor: aiData.profit_factor,
-        max_drawdown: aiData.max_drawdown,
-        avg_return_per_trade: aiData.avg_return_per_trade,
-        best_symbol: aiData.best_symbol,
-        sharpe_ratio: aiData.sharpe_ratio,
-        sortino_ratio: aiData.sortino_ratio,
-        calmar_ratio: 4.2,
-        profit_expectancy: aiData.profit_expectancy,
       });
       setSuccessMsg("✨ AI has deduced the quantitative requirements! Review the rules and metrics below, edit any values if needed, and click 'Confirm & Add Strategy to Suite'.");
     } catch (err: any) {
@@ -1239,15 +1058,6 @@ export default function AstraTradingDesk() {
       entry_rules: strat.entry_rules,
       exit_rules: strat.exit_rules,
       risk_reward: strat.risk_reward,
-      win_rate: strat.win_rate,
-      profit_factor: strat.profit_factor,
-      max_drawdown: strat.max_drawdown,
-      avg_return_per_trade: strat.avg_return_per_trade,
-      best_symbol: strat.best_symbol || 'RELIANCE',
-      sharpe_ratio: strat.sharpe_ratio || 2.2,
-      sortino_ratio: strat.sortino_ratio || 2.8,
-      calmar_ratio: strat.calmar_ratio || 3.5,
-      profit_expectancy: strat.profit_expectancy || 2800.0,
     });
     setAiDeducedDraft(null);
     setCurrentNav('builder');
@@ -1416,6 +1226,7 @@ export default function AstraTradingDesk() {
       items: [
         { key: 'strategies', label: `Strategies (${strategies.length})`, icon: <TrendingUp size={17} /> },
         { key: 'builder', label: 'Strategy Studio', icon: <Sparkles size={17} />, onClick: () => { setStudioMode('create'); setEditingStratKey(null); } },
+        { key: 'backtest', label: 'Backtesting', icon: <FlaskConical size={17} /> },
         { key: 'runner', label: 'Multi-strategy Runner', icon: <Zap size={17} /> },
       ],
     },
@@ -1425,6 +1236,7 @@ export default function AstraTradingDesk() {
         { key: 'audit', label: 'Alerts Log', icon: <History size={17} /> },
         ...(isAdmin ? [{ key: 'users' as const, label: 'Users & Roles', icon: <Users size={17} /> }] : []),
         { key: 'system', label: 'System Status', icon: <Server size={17} /> },
+        { key: 'account', label: 'My Account', icon: <KeyRound size={17} /> },
       ],
     },
   ];
@@ -1894,7 +1706,7 @@ export default function AstraTradingDesk() {
                     >
                       {strategies.map((s) => (
                         <option key={s.key} value={s.key}>
-                          {s.name} ({s.win_rate}%)
+                          {s.name}{s.win_rate != null ? ` (${s.win_rate}%)` : ''}
                         </option>
                       ))}
                     </select>
@@ -2084,15 +1896,15 @@ export default function AstraTradingDesk() {
                                 {s.timeframe}
                               </td>
                               <td style={{ padding: '0.9rem 0.8rem' }}>
-                                <span className="mono" style={{ color: s.win_rate >= 70 ? 'var(--accent-green)' : 'var(--accent-cyan)', fontWeight: 700 }}>
-                                  {s.win_rate}%
+                                <span className="mono" style={{ color: (s.win_rate ?? 0) >= 70 ? 'var(--accent-green)' : 'var(--accent-cyan)', fontWeight: 700 }}>
+                                  {s.win_rate != null ? `${s.win_rate}%` : '–'}
                                 </span>
                               </td>
                               <td className="mono" style={{ padding: '0.9rem 0.8rem' }}>
-                                <b style={{ color: '#fff' }}>{s.correct_hits}</b> / <span style={{ color: 'var(--text-dim)' }}>{s.total_checks}</span>
+                                <b style={{ color: '#fff' }}>{s.correct_hits ?? '–'}</b> / <span style={{ color: 'var(--text-dim)' }}>{s.total_checks ?? '–'}</span>
                               </td>
                               <td className="mono" style={{ padding: '0.9rem 0.8rem', color: 'var(--accent-green)', fontWeight: 600 }}>
-                                {s.profit_factor}x
+                                {s.profit_factor != null ? `${s.profit_factor}x` : '–'}
                               </td>
                               <td className="mono" style={{ padding: '0.9rem 0.8rem', color: 'var(--accent-cyan)', fontWeight: 600 }}>
                                 {s.sharpe_ratio ?? '–'}
@@ -2104,19 +1916,19 @@ export default function AstraTradingDesk() {
                                 {s.calmar_ratio ?? '–'}
                               </td>
                               <td className="mono" style={{ padding: '0.9rem 0.8rem', color: 'var(--accent-green)' }}>
-                                ₹{(s.profit_expectancy != null ? s.profit_expectancy.toLocaleString('en-IN') : '–')}
+                                {s.profit_expectancy != null ? `₹${s.profit_expectancy.toLocaleString('en-IN')}` : '–'}
                               </td>
                               <td className="mono" style={{ padding: '0.9rem 0.8rem', color: '#fca5a5' }}>
-                                -{s.max_drawdown}%
+                                {s.max_drawdown != null ? `-${s.max_drawdown}%` : '–'}
                               </td>
                               <td className="mono" style={{ padding: '0.9rem 0.8rem', color: 'var(--accent-cyan)' }}>
-                                +{s.avg_return_per_trade}%
+                                {s.avg_return_per_trade != null ? `${s.avg_return_per_trade >= 0 ? '+' : ''}${s.avg_return_per_trade}%` : '–'}
                               </td>
                               <td className="mono" style={{ padding: '0.9rem 0.8rem', color: 'var(--text-muted)' }}>
-                                {s.win_loss_ratio ?? '–'}:1
+                                {s.win_loss_ratio != null ? `${s.win_loss_ratio}:1` : '–'}
                               </td>
                               <td className="mono" style={{ padding: '0.9rem 0.8rem', color: '#fff', fontWeight: 700 }}>
-                                {s.best_symbol ?? 'RELIANCE'}
+                                {s.best_symbol ?? '–'}
                               </td>
                               <td className="mono" style={{ padding: '0.9rem 0.8rem', color: 'var(--text-dim)' }}>
                                 {s.risk_reward}
@@ -2217,12 +2029,19 @@ export default function AstraTradingDesk() {
                         <h4 style={{ fontSize: '1rem', fontWeight: 700, color: '#fff' }}>
                           Comprehensive Metrics
                         </h4>
-                        <span
-                          title="These figures are stored seed / user-entered values, not results computed by a backtest. Validate with the backtester before relying on them."
-                          style={{ fontSize: '0.7rem', color: 'var(--accent-amber)', background: 'var(--accent-amber-bg)', padding: '0.2rem 0.5rem', borderRadius: '4px', border: '1px solid rgba(245,158,11,0.3)' }}
-                        >
-                          ⚠ Unverified · not backtested
-                        </span>
+                        {currentStrategy.metrics_source === 'backtest' ? (
+                          <span className="chip good" title={`Updated ${currentStrategy.metrics_updated_at ?? ''}`}>
+                            Backtested · {currentStrategy.metrics_period}
+                          </span>
+                        ) : currentStrategy.backtest_supported ? (
+                          <button className="btn btn-primary" style={{ padding: '0.3rem 0.7rem' }} onClick={() => openBacktest(currentStrategy.key)}>
+                            Run backtest
+                          </button>
+                        ) : (
+                          <span className="chip warn" title="Rules are free text; a coded rule set is needed before it can be backtested.">
+                            Not backtestable yet
+                          </span>
+                        )}
                       </div>
 
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.8rem' }}>
@@ -2232,10 +2051,12 @@ export default function AstraTradingDesk() {
                             Historical Win Rate
                           </span>
                           <div className="mono" style={{ fontSize: '2.3rem', fontWeight: 900, color: 'var(--accent-green)', margin: '0.2rem 0' }}>
-                            {currentStrategy.win_rate}%
+                            {currentStrategy.win_rate != null ? `${currentStrategy.win_rate}%` : '–'}
                           </div>
                           <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
-                            Based on {currentStrategy.total_checks} automated checks
+                            {currentStrategy.metrics_source === 'backtest'
+                              ? `${currentStrategy.total_checks ?? 0} backtested trades`
+                              : 'Run a backtest to measure this'}
                           </span>
                         </div>
 
@@ -2243,11 +2064,11 @@ export default function AstraTradingDesk() {
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.6rem' }}>
                           <div style={{ padding: '0.7rem', background: 'rgba(0,0,0,0.35)', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.04)' }}>
                             <span style={{ fontSize: '0.68rem', color: 'var(--text-dim)', display: 'block' }}>Correct Hits</span>
-                            <span className="mono" style={{ fontSize: '1.15rem', fontWeight: 800, color: 'var(--accent-green)' }}>{currentStrategy.correct_hits}</span>
+                            <span className="mono" style={{ fontSize: '1.15rem', fontWeight: 800, color: 'var(--accent-green)' }}>{currentStrategy.correct_hits ?? '–'}</span>
                           </div>
                           <div style={{ padding: '0.7rem', background: 'rgba(0,0,0,0.35)', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.04)' }}>
                             <span style={{ fontSize: '0.68rem', color: 'var(--text-dim)', display: 'block' }}>False Signals</span>
-                            <span className="mono" style={{ fontSize: '1.15rem', fontWeight: 800, color: '#fca5a5' }}>{currentStrategy.false_signals}</span>
+                            <span className="mono" style={{ fontSize: '1.15rem', fontWeight: 800, color: '#fca5a5' }}>{currentStrategy.false_signals ?? '–'}</span>
                           </div>
                         </div>
 
@@ -2255,11 +2076,11 @@ export default function AstraTradingDesk() {
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.6rem' }}>
                           <div style={{ padding: '0.7rem', background: 'rgba(0,0,0,0.35)', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.04)' }}>
                             <span style={{ fontSize: '0.68rem', color: 'var(--text-dim)', display: 'block' }}>Profit Factor</span>
-                            <span className="mono" style={{ fontSize: '1.15rem', fontWeight: 800, color: 'var(--accent-green)' }}>{currentStrategy.profit_factor}x</span>
+                            <span className="mono" style={{ fontSize: '1.15rem', fontWeight: 800, color: 'var(--accent-green)' }}>{currentStrategy.profit_factor != null ? `${currentStrategy.profit_factor}x` : '–'}</span>
                           </div>
                           <div style={{ padding: '0.7rem', background: 'rgba(0,0,0,0.35)', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.04)' }}>
                             <span style={{ fontSize: '0.68rem', color: 'var(--text-dim)', display: 'block' }}>Max Drawdown</span>
-                            <span className="mono" style={{ fontSize: '1.15rem', fontWeight: 800, color: '#fca5a5' }}>-{currentStrategy.max_drawdown}%</span>
+                            <span className="mono" style={{ fontSize: '1.15rem', fontWeight: 800, color: '#fca5a5' }}>{currentStrategy.max_drawdown != null ? `-${currentStrategy.max_drawdown}%` : '–'}</span>
                           </div>
                         </div>
 
@@ -2283,19 +2104,19 @@ export default function AstraTradingDesk() {
                           </div>
                           <div style={{ padding: '0.7rem', background: 'rgba(0,0,0,0.35)', borderRadius: '6px', border: '1px solid rgba(16,185,129,0.2)' }}>
                             <span style={{ fontSize: '0.68rem', color: 'var(--accent-green)', display: 'block', fontWeight: 600 }}>Profit Expectancy</span>
-                            <span className="mono" style={{ fontSize: '1.05rem', fontWeight: 800, color: '#fff' }}>₹{(currentStrategy.profit_expectancy != null ? currentStrategy.profit_expectancy.toLocaleString('en-IN') : '–')}</span>
+                            <span className="mono" style={{ fontSize: '1.05rem', fontWeight: 800, color: '#fff' }}>{currentStrategy.profit_expectancy != null ? `₹${currentStrategy.profit_expectancy.toLocaleString('en-IN')}` : '–'}</span>
                           </div>
                         </div>
 
                         {/* Win/Loss & Avg Return */}
                         <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.6rem 0.8rem', background: 'rgba(255,255,255,0.03)', borderRadius: '6px', fontSize: '0.78rem' }}>
                           <span style={{ color: 'var(--text-muted)' }}>Win / Loss Ratio:</span>
-                          <span className="mono" style={{ color: '#fff', fontWeight: 700 }}>{currentStrategy.win_loss_ratio ?? '–'} : 1</span>
+                          <span className="mono" style={{ color: '#fff', fontWeight: 700 }}>{currentStrategy.win_loss_ratio != null ? `${currentStrategy.win_loss_ratio} : 1` : '–'}</span>
                         </div>
 
                         <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.6rem 0.8rem', background: 'rgba(255,255,255,0.03)', borderRadius: '6px', fontSize: '0.78rem' }}>
                           <span style={{ color: 'var(--text-muted)' }}>Avg Trade Gain:</span>
-                          <span className="mono" style={{ color: 'var(--accent-cyan)', fontWeight: 700 }}>+{currentStrategy.avg_return_per_trade}%</span>
+                          <span className="mono" style={{ color: 'var(--accent-cyan)', fontWeight: 700 }}>{currentStrategy.avg_return_per_trade != null ? `${currentStrategy.avg_return_per_trade >= 0 ? '+' : ''}${currentStrategy.avg_return_per_trade}%` : '–'}</span>
                         </div>
 
                         {/* Max Consecutive Wins & Losses */}
@@ -2309,7 +2130,7 @@ export default function AstraTradingDesk() {
                         {/* Top Symbol & R:R */}
                         <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.6rem 0.8rem', background: 'rgba(255,255,255,0.03)', borderRadius: '6px', fontSize: '0.78rem' }}>
                           <span style={{ color: 'var(--text-muted)' }}>Top Alpha Symbol:</span>
-                          <span className="mono" style={{ color: 'var(--accent-cyan)', fontWeight: 800 }}>{currentStrategy.best_symbol ?? 'RELIANCE'}</span>
+                          <span className="mono" style={{ color: 'var(--accent-cyan)', fontWeight: 800 }}>{currentStrategy.best_symbol ?? '–'}</span>
                         </div>
 
                         <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.6rem 0.8rem', background: 'rgba(255,255,255,0.03)', borderRadius: '6px', fontSize: '0.78rem' }}>
@@ -2374,15 +2195,6 @@ export default function AstraTradingDesk() {
                         entry_rules: '',
                         exit_rules: '',
                         risk_reward: '1:2',
-                        win_rate: 76.0,
-                        profit_factor: 2.5,
-                        max_drawdown: 5.0,
-                        avg_return_per_trade: 2.1,
-                        best_symbol: 'RELIANCE',
-                        sharpe_ratio: 2.3,
-                        sortino_ratio: 2.9,
-                        calmar_ratio: 3.8,
-                        profit_expectancy: 3100.0,
                       });
                       setAiDeducedDraft(null);
                       setAiPrompt('');
@@ -2736,24 +2548,8 @@ export default function AstraTradingDesk() {
                       />
                     </div>
 
-                    {/* Metric Estimates Grid */}
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0.5rem', background: 'rgba(0,0,0,0.25)', padding: '0.8rem', borderRadius: '6px' }}>
-                      <div>
-                        <span style={{ fontSize: '0.65rem', color: 'var(--text-dim)', display: 'block' }}>Win Rate</span>
-                        <span className="mono" style={{ fontSize: '0.9rem', color: 'var(--accent-green)', fontWeight: 700 }}>{strategyForm.win_rate}%</span>
-                      </div>
-                      <div>
-                        <span style={{ fontSize: '0.65rem', color: 'var(--text-dim)', display: 'block' }}>Profit Factor</span>
-                        <span className="mono" style={{ fontSize: '0.9rem', color: 'var(--accent-green)', fontWeight: 700 }}>{strategyForm.profit_factor}x</span>
-                      </div>
-                      <div>
-                        <span style={{ fontSize: '0.65rem', color: 'var(--text-dim)', display: 'block' }}>Sharpe Ratio</span>
-                        <span className="mono" style={{ fontSize: '0.9rem', color: 'var(--accent-cyan)', fontWeight: 700 }}>{strategyForm.sharpe_ratio}</span>
-                      </div>
-                      <div>
-                        <span style={{ fontSize: '0.65rem', color: 'var(--text-dim)', display: 'block' }}>Expectancy</span>
-                        <span className="mono" style={{ fontSize: '0.9rem', color: '#fff', fontWeight: 700 }}>₹{strategyForm.profit_expectancy}</span>
-                      </div>
+                    <div className="notice info" style={{ fontSize: '0.78rem' }}>
+                      Performance numbers are never estimated. Once a strategy has a coded rule set, run it in Backtesting to measure them on real data.
                     </div>
 
                     {/* Confirm & Save Button */}
@@ -2824,8 +2620,8 @@ export default function AstraTradingDesk() {
                           {s.description.slice(0, 110)}...
                         </p>
                         <div className="mono" style={{ display: 'flex', gap: '0.8rem', fontSize: '0.74rem', marginTop: '0.4rem' }}>
-                          <span style={{ color: 'var(--accent-green)' }}>Win Rate: <b>{s.win_rate}%</b></span>
-                          <span style={{ color: 'var(--accent-cyan)' }}>Profit Factor: <b>{s.profit_factor}x</b></span>
+                          <span style={{ color: 'var(--accent-green)' }}>Win Rate: <b>{s.win_rate != null ? `${s.win_rate}%` : '–'}</b></span>
+                          <span style={{ color: 'var(--accent-cyan)' }}>Profit Factor: <b>{s.profit_factor != null ? `${s.profit_factor}x` : '–'}</b></span>
                           <span style={{ color: '#a78bfa' }}>Sharpe: <b>{s.sharpe_ratio ?? '–'}</b></span>
                         </div>
                       </div>
@@ -3042,11 +2838,11 @@ export default function AstraTradingDesk() {
                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.4rem', background: 'rgba(0,0,0,0.3)', padding: '0.6rem', borderRadius: '6px' }}>
                           <div className="mono">
                             <span style={{ fontSize: '0.65rem', color: 'var(--text-dim)', display: 'block' }}>Win Rate</span>
-                            <span style={{ fontSize: '0.85rem', color: 'var(--accent-green)', fontWeight: 700 }}>{strat.win_rate}%</span>
+                            <span style={{ fontSize: '0.85rem', color: 'var(--accent-green)', fontWeight: 700 }}>{strat.win_rate != null ? `${strat.win_rate}%` : '–'}</span>
                           </div>
                           <div className="mono">
                             <span style={{ fontSize: '0.65rem', color: 'var(--text-dim)', display: 'block' }}>Profit Factor</span>
-                            <span style={{ fontSize: '0.85rem', color: 'var(--accent-cyan)', fontWeight: 700 }}>{strat.profit_factor}x</span>
+                            <span style={{ fontSize: '0.85rem', color: 'var(--accent-cyan)', fontWeight: 700 }}>{strat.profit_factor != null ? `${strat.profit_factor}x` : '–'}</span>
                           </div>
                           <div className="mono">
                             <span style={{ fontSize: '0.65rem', color: 'var(--text-dim)', display: 'block' }}>Sharpe</span>
@@ -3559,6 +3355,73 @@ export default function AstraTradingDesk() {
           {/* =========================================================================
               SECTION 5: SYSTEM STATUS (real values only; nothing hardcoded)
               ========================================================================= */}
+          {currentNav === 'backtest' && token && (
+            <div className="animate-fade-in">
+              <BacktestPanel
+                apiBase={API_BASE}
+                token={token}
+                isAdmin={isAdmin}
+                initialKey={backtestKey}
+                onUnauthorized={handleUnauthorized}
+                onOpenChart={(sym) => { setChartSymbol(sym); setCurrentNav('charts'); }}
+                onMetricsUpdated={() => fetchStrategies(token)}
+              />
+            </div>
+          )}
+
+          {currentNav === 'account' && token && (
+            <div className="animate-fade-in ui-stack" style={{ maxWidth: 560 }}>
+              <div className="ui-card">
+                <div className="ui-card-head">
+                  <div>
+                    <div className="ui-card-title">Change password</div>
+                    <div className="ui-card-sub">Signed in as {userProfile.username} ({userProfile.role.replace('_', ' ')})</div>
+                  </div>
+                </div>
+                <form
+                  className="ui-stack"
+                  style={{ gap: '0.75rem' }}
+                  onSubmit={async (e) => {
+                    e.preventDefault();
+                    setPwMsg(null);
+                    if (pwForm.next !== pwForm.confirm) { setPwMsg({ ok: false, text: 'The new passwords do not match.' }); return; }
+                    setPwBusy(true);
+                    try {
+                      const res = await fetch(`${API_BASE}/users/me/password`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                        body: JSON.stringify({ current_password: pwForm.current, new_password: pwForm.next }),
+                      });
+                      if (res.status === 401) { handleUnauthorized(); return; }
+                      const body = await res.json().catch(() => ({}));
+                      if (!res.ok) throw new Error(body.detail || `HTTP ${res.status}`);
+                      setPwForm({ current: '', next: '', confirm: '' });
+                      setPwMsg({
+                        ok: true,
+                        text: body.persistent
+                          ? 'Password updated.'
+                          : 'Password updated, but the server database is temporary and resets on restart. Set a permanent password in the server settings.',
+                      });
+                    } catch (err: any) {
+                      setPwMsg({ ok: false, text: err.message || 'Could not change password.' });
+                    } finally {
+                      setPwBusy(false);
+                    }
+                  }}
+                >
+                  <input className="form-input" type="password" autoComplete="current-password" placeholder="Current password" required
+                    value={pwForm.current} onChange={(e) => setPwForm({ ...pwForm, current: e.target.value })} />
+                  <input className="form-input" type="password" autoComplete="new-password" placeholder="New password (10+ chars, upper & lower case, a number)" required
+                    value={pwForm.next} onChange={(e) => setPwForm({ ...pwForm, next: e.target.value })} />
+                  <input className="form-input" type="password" autoComplete="new-password" placeholder="Repeat new password" required
+                    value={pwForm.confirm} onChange={(e) => setPwForm({ ...pwForm, confirm: e.target.value })} />
+                  {pwMsg && <div className={`notice ${pwMsg.ok ? 'info' : 'warn'}`}>{pwMsg.text}</div>}
+                  <div><button className="btn btn-primary" type="submit" disabled={pwBusy}>{pwBusy ? 'Saving…' : 'Update password'}</button></div>
+                </form>
+              </div>
+            </div>
+          )}
+
           {currentNav === 'system' && (
             <div className="animate-fade-in ui-stack">
               <div className="ui-card">

@@ -51,21 +51,25 @@ class StrategyOut(BaseModel):
     entry_rules: str
     exit_rules: str
     risk_reward: str
-    win_rate: float
-    total_checks: int
-    correct_hits: int
-    false_signals: int
-    profit_factor: float
-    max_drawdown: float
-    avg_return_per_trade: float
-    sharpe_ratio: float = 2.45
-    sortino_ratio: float = 3.12
-    calmar_ratio: float = 4.88
-    profit_expectancy: float = 3420.0
-    win_loss_ratio: float = 2.1
-    max_consecutive_wins: int = 14
-    max_consecutive_losses: int = 3
-    best_symbol: str = "RELIANCE"
+    win_rate: Optional[float] = None
+    total_checks: Optional[int] = None
+    correct_hits: Optional[int] = None
+    false_signals: Optional[int] = None
+    profit_factor: Optional[float] = None
+    max_drawdown: Optional[float] = None
+    avg_return_per_trade: Optional[float] = None
+    sharpe_ratio: Optional[float] = None
+    sortino_ratio: Optional[float] = None
+    calmar_ratio: Optional[float] = None
+    profit_expectancy: Optional[float] = None
+    win_loss_ratio: Optional[float] = None
+    max_consecutive_wins: Optional[int] = None
+    max_consecutive_losses: Optional[int] = None
+    best_symbol: Optional[str] = None
+    metrics_source: Optional[str] = None
+    metrics_updated_at: Optional[str] = None
+    metrics_period: Optional[str] = None
+    backtest_supported: bool = False
     is_active: bool
     is_enabled_for_execution: bool = True
     created_by: str = "system"
@@ -84,11 +88,6 @@ class StrategyCreate(BaseModel):
     entry_rules: str
     exit_rules: str
     risk_reward: str = "1:2"
-    win_rate: float = 75.0
-    profit_factor: float = 2.4
-    max_drawdown: float = 5.5
-    avg_return_per_trade: float = 2.0
-    best_symbol: str = "RELIANCE"
     created_by: str = "user"
     ai_prompt: Optional[str] = None
 
@@ -100,9 +99,6 @@ class StrategyUpdate(BaseModel):
     entry_rules: Optional[str] = None
     exit_rules: Optional[str] = None
     risk_reward: Optional[str] = None
-    win_rate: Optional[float] = None
-    profit_factor: Optional[float] = None
-    max_drawdown: Optional[float] = None
     is_enabled_for_execution: Optional[bool] = None
 
 class StrategyCompareRequest(BaseModel):
@@ -122,15 +118,29 @@ class AIGenerateStrategyResponse(BaseModel):
     entry_rules: str
     exit_rules: str
     risk_reward: str
-    win_rate: float
-    profit_factor: float
-    max_drawdown: float
-    avg_return_per_trade: float
-    best_symbol: str
-    sharpe_ratio: float
-    sortino_ratio: float
-    profit_expectancy: float
+    win_rate: Optional[float] = None
+    profit_factor: Optional[float] = None
+    max_drawdown: Optional[float] = None
+    avg_return_per_trade: Optional[float] = None
+    best_symbol: Optional[str] = None
+    sharpe_ratio: Optional[float] = None
+    sortino_ratio: Optional[float] = None
+    profit_expectancy: Optional[float] = None
     deduced_reasoning: str
+
+class BacktestRequest(BaseModel):
+    strategy_key: str
+    sessions: int = 20
+    symbols: Optional[List[str]] = None
+    capital_per_trade: float = 100000.0
+    risk_per_trade: float = 0.0
+    starting_capital: float = 500000.0
+    include_costs: bool = True
+    slippage_bps: float = 2.0
+
+class PasswordChange(BaseModel):
+    current_password: str
+    new_password: str
 
 class SetActiveExecutionRequest(BaseModel):
     strategy_keys: List[str]

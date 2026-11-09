@@ -239,3 +239,20 @@ code, pre, .mono {
 @media (max-width: 900px) {
   .ui-grid-2 { grid-template-columns: 1fr; }
 }
+
+/* ---------- Backtesting ---------- */
+.bt-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 0.75rem; }
+.bt-field { display: flex; flex-direction: column; gap: 0.3rem; font-size: 0.72rem; color: var(--text-dim); font-weight: 600; min-width: 0; }
+.bt-field .form-input { padding: 0.5rem 0.7rem; font-size: 0.85rem; }
+.bt-wide { grid-column: span 2; }
+.bt-check { flex-direction: row; align-items: center; gap: 0.5rem; grid-column: 1 / -1; color: var(--text-muted); font-weight: 500; font-size: 0.8rem; }
+.bt-rules { margin-top: 0.85rem; padding: 0.7rem 0.85rem; border-radius: 8px; background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border-subtle); font-size: 0.8rem; color: var(--text-muted); line-height: 1.5; }
+.bt-rules b { color: #fff; }
+.bt-symbols { display: flex; flex-wrap: wrap; gap: 0.35rem; max-height: 150px; overflow-y: auto; }
+.bt-symbols .chip { cursor: pointer; background: transparent; }
+.bt-progress { height: 6px; border-radius: 999px; background: rgba(255, 255, 255, 0.06); overflow: hidden; }
+.bt-progress > div { height: 100%; background: var(--accent-teal); transition: width 0.4s; }
+.bt-stats { display: flex; flex-wrap: wrap; gap: 0.4rem 1.2rem; margin-top: 0.9rem; font-size: 0.78rem; color: var(--text-dim); }
+.bt-stats b { color: var(--text-main); font-family: 'JetBrains Mono', monospace; font-weight: 600; }
+.bt-notes { margin: 0.8rem 0 0; padding-left: 1.1rem; font-size: 0.76rem; color: #fcd34d; line-height: 1.6; }
+@media (max-width: 640px) { .bt-wide { grid-column: auto; } }

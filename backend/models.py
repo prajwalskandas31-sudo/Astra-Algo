@@ -47,21 +47,25 @@ class Strategy(Base):
     entry_rules = Column(Text)
     exit_rules = Column(Text)
     risk_reward = Column(String, default="1:2")
-    win_rate = Column(Float, default=78.4)
-    total_checks = Column(Integer, default=1480)
-    correct_hits = Column(Integer, default=1160)
-    false_signals = Column(Integer, default=320)
-    profit_factor = Column(Float, default=2.74)
-    max_drawdown = Column(Float, default=4.8)
-    avg_return_per_trade = Column(Float, default=2.35)
-    sharpe_ratio = Column(Float, default=2.45)
-    sortino_ratio = Column(Float, default=3.12)
-    calmar_ratio = Column(Float, default=4.88)
-    profit_expectancy = Column(Float, default=3420.0)
-    win_loss_ratio = Column(Float, default=2.1)
-    max_consecutive_wins = Column(Integer, default=14)
-    max_consecutive_losses = Column(Integer, default=3)
-    best_symbol = Column(String, default="RELIANCE")
+    # Performance metrics come ONLY from the backtest engine (backend/backtest.py); NULL until a backtest runs.
+    win_rate = Column(Float, nullable=True)
+    total_checks = Column(Integer, nullable=True)
+    correct_hits = Column(Integer, nullable=True)
+    false_signals = Column(Integer, nullable=True)
+    profit_factor = Column(Float, nullable=True)
+    max_drawdown = Column(Float, nullable=True)
+    avg_return_per_trade = Column(Float, nullable=True)
+    sharpe_ratio = Column(Float, nullable=True)
+    sortino_ratio = Column(Float, nullable=True)
+    calmar_ratio = Column(Float, nullable=True)
+    profit_expectancy = Column(Float, nullable=True)
+    win_loss_ratio = Column(Float, nullable=True)
+    max_consecutive_wins = Column(Integer, nullable=True)
+    max_consecutive_losses = Column(Integer, nullable=True)
+    best_symbol = Column(String, nullable=True)
+    metrics_source = Column(String, nullable=True)      # "backtest" when metrics are real
+    metrics_updated_at = Column(String, nullable=True)
+    metrics_period = Column(String, nullable=True)      # e.g. "2026-10-13 to 2026-11-07 · 20 sessions · Nifty 50"
     is_active = Column(Boolean, default=True)
     is_enabled_for_execution = Column(Boolean, default=True)
     created_by = Column(String, default="system")  # system, user, ai_generated
@@ -106,7 +110,38 @@ class OrderAuditLog(Base):
     data_source = Column(String, nullable=True)
 
 
-# Columns added after the first release; SQLite needs ALTER TABLE for existing databases.
+class BacktestRun(Base):
+    __tablename__ = "backtest_runs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    created_at = Column(String, index=True)
+    created_by = Column(String)
+    strategy_key = Column(String, index=True)
+    strategy_name = Column(String)
+    period_from = Column(String, nullable=True)
+    period_to = Column(String, nullable=True)
+    sessions = Column(Integer, nullable=True)
+    symbols_tested = Column(Integer, nullable=True)
+    trades = Column(Integer, nullable=True)
+    win_rate = Column(Float, nullable=True)
+    net_pnl = Column(Float, nullable=True)
+    profit_factor = Column(Float, nullable=True)
+    max_drawdown_pct = Column(Float, nullable=True)
+    result_json = Column(Text)
+
+
+METRIC_FIELDS = ["win_rate", "total_checks", "correct_hits", "false_signals", "profit_factor", "max_drawdown",
+                 "avg_return_per_trade", "sharpe_ratio", "sortino_ratio", "calmar_ratio", "profit_expectancy",
+                 "win_loss_ratio", "max_consecutive_wins", "max_consecutive_losses", "best_symbol"]
+
+STRATEGY_MIGRATIONS = {
+    "sharpe_ratio": "FLOAT", "sortino_ratio": "FLOAT", "calmar_ratio": "FLOAT", "profit_expectancy": "FLOAT",
+    "win_loss_ratio": "FLOAT", "max_consecutive_wins": "INTEGER", "max_consecutive_losses": "INTEGER",
+    "best_symbol": "VARCHAR", "is_enabled_for_execution": "BOOLEAN", "created_by": "VARCHAR", "ai_prompt": "TEXT",
+    "metrics_source": "VARCHAR", "metrics_updated_at": "VARCHAR", "metrics_period": "VARCHAR",
+}
+
+# Columns added after the first release; existing databases need ALTER TABLE.
 ORDER_AUDIT_MIGRATIONS = {
     "session_date": "VARCHAR",
     "quantity": "INTEGER",
