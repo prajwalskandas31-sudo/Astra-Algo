@@ -1186,9 +1186,10 @@ def startup_event():
     for username, env_name, dev_default, role in seed_accounts:
         chosen = os.getenv(env_name)
         if not chosen and is_production:
-            chosen = secrets.token_urlsafe(12)
-            print(f"[startup] SECURITY: {env_name} is not set. One-time password for '{username}' this boot: {chosen}  "
-                  f"(set {env_name} in the Render environment to choose a permanent one)")
+            # Lock the account with an unguessable, never-revealed password until the operator sets the env var.
+            chosen = secrets.token_urlsafe(32)
+            print(f"[startup] SECURITY: {env_name} is not set, so '{username}' is locked. "
+                  f"Set {env_name} in the Render environment and restart to enable it.")
         chosen = chosen or dev_default
         user = db.query(models.User).filter(models.User.username == username).first()
         if not user:

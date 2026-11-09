@@ -47,8 +47,8 @@ services:
         value: paper
       - key: GEMINI_API_KEY
         sync: false
-      # Sign-in passwords for the three built-in accounts. If unset, a one-time password is printed to the
-      # Render logs on each boot (the old public defaults are refused in production).
+      # Sign-in passwords for the three built-in accounts. An account whose variable is unset stays locked
+      # (the old public defaults are refused in production).
       - key: SUPERADMIN_PASSWORD
         sync: false
       - key: ADMIN_PASSWORD
