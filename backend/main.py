@@ -944,7 +944,8 @@ def get_system_live_health(
                 "jobs_count": len(scheduler.get_jobs()) if scheduler.running else 0
             },
             "database": {
-                "name": "SQLite Operational Database (WAL Mode)",
+                "name": "PostgreSQL" if database.SQLALCHEMY_DATABASE_URL.startswith("postgresql") else "SQLite",
+                "persistent": not (database.SQLALCHEMY_DATABASE_URL.startswith("sqlite") and bool(os.getenv("RENDER"))),
                 "healthy": db_healthy,
                 "status": "ONLINE" if db_healthy else "ERROR"
             },

@@ -159,6 +159,7 @@ interface LiveHealthData {
     };
     database: {
       name: string;
+      persistent?: boolean;
       healthy: boolean;
       status: string;
     };
@@ -3456,7 +3457,7 @@ export default function AstraTradingDesk() {
                             ['WhatsApp alerts', s.whatsapp?.status, `${s.whatsapp?.recipients_configured ?? 0} recipient(s)${s.whatsapp?.verified_name ? ` · ${s.whatsapp.verified_name}` : ''}`, s.whatsapp?.latency_ms ?? null],
                             ['Telegram alerts', s.telegram?.status, `${s.telegram?.chat_groups_configured ?? 0} chat(s)${s.telegram?.bot_username ? ` · @${s.telegram.bot_username}` : ''}`, s.telegram?.latency_ms ?? null],
                             ['Scheduler', s.scheduler?.status, `${s.scheduler?.jobs_count ?? 0} jobs · ${s.scheduler?.timezone ?? ''}`, null],
-                            ['Database', s.database?.status, '', null],
+                            ['Database', s.database?.status, s.database?.name ? `${s.database.name} · ${s.database.persistent === false ? 'temporary: resets when the server restarts' : 'persistent'}` : '', null],
                             ['IP guard', s.ip_guard?.status, s.ip_guard?.client_ip ? `Your IP ${s.ip_guard.client_ip}` : '', null],
                           ];
                           return rows.map(([name, status, detail, lat]) => (
